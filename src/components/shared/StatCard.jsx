@@ -1,4 +1,4 @@
-export default function StatCard({ icon, label, value, sub }) {
+export default function StatCard({ icon, label, value, sub, valueColor }) {
   return (
     <div
       style={{
@@ -22,7 +22,7 @@ export default function StatCard({ icon, label, value, sub }) {
         <i className={`ti ti-${icon}`} style={{ fontSize: 14 }} aria-hidden="true" />
         {label}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 500, color: "var(--text-primary)" }}>
+      <div style={{ fontSize: 22, fontWeight: 500, color: valueColor || "var(--text-primary)" }}>
         {value}
       </div>
       {sub && (

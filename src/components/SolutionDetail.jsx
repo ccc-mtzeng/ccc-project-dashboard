@@ -271,16 +271,22 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
       {/* Stats row */}
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
         <StatCard icon="clock" label="Estimated" value={`${draft.total_hours}h`} />
-        <StatCard icon="player-play" label="Actual" value={`${actual}h`} />
+        <StatCard
+          icon="player-play" label="Actual"
+          value={`${actual}h`}
+          valueColor={actual > draft.total_hours && draft.total_hours > 0 ? "#E24B4A" : undefined}
+        />
         <StatCard
           icon="percentage"
           label="Progress"
           value={`${draft.total_hours ? Math.round((actual / draft.total_hours) * 100) : 0}%`}
+          valueColor={actual > draft.total_hours && draft.total_hours > 0 ? "#E24B4A" : undefined}
         />
         <StatCard
           icon="plus-minus"
           label="Variance"
-          value={`${actual - draft.total_hours > 0 ? "+" : ""}${actual - draft.total_hours}h`}
+          value={`${actual - draft.total_hours > 0 ? "+" : ""}${(actual - draft.total_hours).toFixed(1)}h`}
+          valueColor={actual > draft.total_hours ? "#E24B4A" : actual < draft.total_hours ? "#1D9E75" : undefined}
         />
       </div>
 
@@ -312,6 +318,8 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
         {draft.tasks.map((t, i) => {
           const ts = TASK_STATUS[t.status] || TASK_STATUS.not_started;
           const catColor = CATEGORY_COLORS[t.category] || "#888";
+          const over = (Number(t.actual_hours) || 0) > t.estimated_hours && t.estimated_hours > 0;
+          const variance = (Number(t.actual_hours) || 0) - t.estimated_hours;
           return (
             <div
               key={i}
@@ -322,10 +330,16 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
                 borderTop: "0.5px solid var(--border-light)",
                 alignItems: "center",
                 fontSize: 13,
+                background: over ? "rgba(226,75,74,0.04)" : "transparent",
               }}
             >
-              <span style={{ color: "var(--text-primary)", fontWeight: 450 }}>
+              <span style={{ color: "var(--text-primary)", fontWeight: 450, display: "flex", alignItems: "center", gap: 6 }}>
                 {t.name}
+                {over && (
+                  <span style={{ fontSize: 11, color: "#E24B4A", fontWeight: 500 }}>
+                    +{variance.toFixed(1)}h
+                  </span>
+                )}
               </span>
               <span style={{ fontSize: 11, color: catColor, textTransform: "capitalize" }}>
                 {t.category}
@@ -334,13 +348,14 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
                 {t.estimated_hours}h
               </span>
               <span style={{ textAlign: "right" }}>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.5}
+                <HourInput
                   value={t.actual_hours}
-                  onChange={(e) => updateTask(i, "actual_hours", Number(e.target.value) || 0)}
-                  style={miniInputStyle}
+                  onChange={(val) => updateTask(i, "actual_hours", val)}
+                  style={{
+                    ...miniInputStyle,
+                    color: over ? "#E24B4A" : "var(--text-primary)",
+                    borderColor: over ? "rgba(226,75,74,0.4)" : "var(--border-light)",
+                  }}
                 />
               </span>
               <span style={{ textAlign: "right" }}>
@@ -371,12 +386,19 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
             fontSize: 13, fontWeight: 500,
           }}
         >
-          <span style={{ color: "var(--text-primary)" }}>Total</span>
+          <span style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: 6 }}>
+            Total
+            {actual > draft.total_hours && draft.total_hours > 0 && (
+              <span style={{ fontSize: 11, color: "#E24B4A", fontWeight: 500 }}>
+                +{(actual - draft.total_hours).toFixed(1)}h over
+              </span>
+            )}
+          </span>
           <span />
           <span style={{ textAlign: "right", color: "var(--text-secondary)" }}>
             {draft.total_hours}h
           </span>
-          <span style={{ textAlign: "right", color: "var(--text-primary)" }}>
+          <span style={{ textAlign: "right", color: actual > draft.total_hours ? "#E24B4A" : "var(--text-primary)" }}>
             {actual}h
           </span>
           <span />
@@ -397,16 +419,25 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
         </div>
         {draft.tasks.map((t, i) => {
           const catColor = CATEGORY_COLORS[t.category] || "#888";
+          const taskActual = Number(t.actual_hours) || 0;
+          const over = taskActual > t.estimated_hours && t.estimated_hours > 0;
           return (
             <div key={i} style={{ marginBottom: 8 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
                 <span style={{ color: "var(--text-secondary)" }}>{t.name}</span>
-                <span style={{ color: "var(--text-primary)", fontWeight: 500 }}>
-                  {t.actual_hours}/{t.estimated_hours}h
+                <span style={{ fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ color: over ? "#E24B4A" : "var(--text-primary)" }}>
+                    {taskActual}/{t.estimated_hours}h
+                  </span>
+                  {over && (
+                    <span style={{ fontSize: 10, color: "#E24B4A" }}>
+                      +{(taskActual - t.estimated_hours).toFixed(1)}
+                    </span>
+                  )}
                 </span>
               </div>
               <ProgressBar
-                value={t.actual_hours}
+                value={taskActual}
                 max={t.estimated_hours}
                 color={catColor}
                 height={5}
@@ -467,5 +498,51 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Hour input with proper zero/empty handling ──────────────────────
+
+function HourInput({ value, onChange, style }) {
+  const [text, setText] = useState(value == null || value === 0 ? "" : String(value));
+
+  // Sync from parent when the solution resets (e.g. navigating to a different one)
+  useEffect(() => {
+    setText(value == null || value === 0 ? "" : String(value));
+  }, [value]);
+
+  function handleChange(e) {
+    const raw = e.target.value;
+    // Allow empty, digits, and one decimal point
+    if (raw === "" || /^\d*\.?\d*$/.test(raw)) {
+      setText(raw);
+      // Update parent live so stats reflect as you type
+      onChange(raw === "" ? 0 : Number(raw) || 0);
+    }
+  }
+
+  function handleBlur() {
+    // Normalize: empty → show empty (value is 0), otherwise clean number
+    const num = text === "" ? 0 : Number(text) || 0;
+    onChange(num);
+    setText(num === 0 ? "" : String(num));
+  }
+
+  function handleFocus(e) {
+    // Select all on focus for easy replacement
+    e.target.select();
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={text}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      onFocus={handleFocus}
+      placeholder="0"
+      style={style}
+    />
   );
 }
