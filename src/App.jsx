@@ -1,15 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Login from "./components/Login";
 import Dashboard from "./components/Dashboard";
 import SolutionList from "./components/SolutionList";
 import SolutionDetail from "./components/SolutionDetail";
 import Timeline from "./components/Timeline";
 import SolutionUpload from "./components/SolutionUpload";
-import { SEED_SOLUTIONS } from "./data/solutions";
 import { NAV_ITEMS } from "./data/constants";
 import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
-import { configure } from "./services/github";
+import { configure, isConfigured, loadIndex, loadSolution } from "./services/github";
 
 const pillStyle = {
   fontSize: 12, padding: "4px 10px", borderRadius: 99, cursor: "pointer",
@@ -26,13 +25,17 @@ export default function App() {
   const [filterTag, setFilterTag] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
 
+  // Live data state
+  const [solutions, setSolutions] = useState([]);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [dataError, setDataError] = useState("");
+
   // Handle OAuth callback on mount
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
 
     if (code && !auth) {
-      // Clean the URL so the code doesn't linger
       window.history.replaceState({}, "", window.location.pathname);
       setAuthLoading(true);
 
@@ -59,9 +62,54 @@ export default function App() {
     }
   }, [auth]);
 
+  // Load solutions from GitHub after auth
+  const fetchSolutions = useCallback(async () => {
+    if (!isConfigured()) return;
+    setDataLoading(true);
+    setDataError("");
+
+    try {
+      const { data: index } = await loadIndex();
+
+      if (!index || index.length === 0) {
+        setSolutions([]);
+        setDataLoading(false);
+        return;
+      }
+
+      // Load all solutions in parallel
+      const results = await Promise.all(
+        index.map((entry) =>
+          loadSolution(entry.id).catch((err) => {
+            console.warn(`Failed to load ${entry.id}:`, err);
+            return null;
+          })
+        )
+      );
+
+      const loaded = results
+        .filter((r) => r !== null)
+        .map((r) => r.data);
+
+      setSolutions(loaded);
+    } catch (err) {
+      console.error("Failed to load solutions:", err);
+      setDataError(err.message);
+    } finally {
+      setDataLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (auth && isConfigured()) {
+      fetchSolutions();
+    }
+  }, [auth, fetchSolutions]);
+
   function handleLogout() {
     clearAuth();
     setAuth(null);
+    setSolutions([]);
     setView("dashboard");
     setSelectedId(null);
   }
@@ -71,8 +119,6 @@ export default function App() {
     return <Login error={authError} loading={authLoading} />;
   }
 
-  // TODO: Replace with GitHub API loading once data repo is seeded
-  const solutions = SEED_SOLUTIONS;
   const selected = solutions.find((s) => s.id === selectedId);
 
   function handleSelect(id) {
@@ -81,10 +127,11 @@ export default function App() {
   }
 
   function handleSolutionSaved(sol) {
-    // After saving a new solution via upload, navigate to it
-    // (Once wired to live data, this would trigger a refresh)
-    setSelectedId(sol.id);
-    setView("detail");
+    // Refresh the full list, then navigate to the new solution
+    fetchSolutions().then(() => {
+      setSelectedId(sol.id);
+      setView("detail");
+    });
   }
 
   return (
@@ -147,14 +194,98 @@ export default function App() {
         </button>
       </div>
 
+      {/* Loading state */}
+      {dataLoading && solutions.length === 0 && (
+        <div style={{ textAlign: "center", padding: "48px 20px" }}>
+          <div
+            style={{
+              width: 28, height: 28,
+              border: "3px solid var(--border-light)",
+              borderTopColor: "var(--text-primary)",
+              borderRadius: "50%",
+              margin: "0 auto 12px",
+              animation: "spin 0.8s linear infinite",
+            }}
+          />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            Loading solutions…
+          </div>
+        </div>
+      )}
+
+      {/* Error state */}
+      {dataError && (
+        <div
+          style={{
+            background: "#FCEBEB",
+            border: "1px solid #E24B4A",
+            borderRadius: 10,
+            padding: "12px 16px",
+            marginBottom: 16,
+            fontSize: 13,
+            color: "#7A1D1D",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <i className="ti ti-alert-circle" style={{ fontSize: 16 }} />
+          Failed to load solutions: {dataError}
+          <button
+            onClick={fetchSolutions}
+            style={{
+              marginLeft: "auto", fontFamily: "inherit", fontSize: 12,
+              padding: "4px 10px", borderRadius: 6,
+              border: "1px solid #E24B4A", background: "transparent",
+              color: "#7A1D1D", cursor: "pointer",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!dataLoading && !dataError && solutions.length === 0 && view !== "upload" && (
+        <div style={{ textAlign: "center", padding: "48px 20px" }}>
+          <i
+            className="ti ti-folder-off"
+            style={{ fontSize: 36, color: "var(--text-secondary)", display: "block", marginBottom: 12 }}
+          />
+          <div style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)", marginBottom: 4 }}>
+            No solutions yet
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16 }}>
+            Import a solution design PDF to get started.
+          </div>
+          <button
+            onClick={() => setView("upload")}
+            style={{
+              fontFamily: "inherit", fontSize: 13, fontWeight: 500,
+              padding: "8px 16px", borderRadius: 6, border: "none",
+              background: "var(--text-primary)", color: "var(--bg-primary)",
+              cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6,
+            }}
+          >
+            <i className="ti ti-file-upload" style={{ fontSize: 15 }} />
+            Import solution
+          </button>
+        </div>
+      )}
+
       {/* Views */}
-      {view === "dashboard" && <Dashboard solutions={solutions} onSelect={handleSelect} />}
-      {view === "solutions" && (
+      {!dataLoading && view === "dashboard" && solutions.length > 0 && (
+        <Dashboard solutions={solutions} onSelect={handleSelect} />
+      )}
+      {!dataLoading && view === "solutions" && solutions.length > 0 && (
         <SolutionList solutions={solutions} onSelect={handleSelect}
           filterTag={filterTag} setFilterTag={setFilterTag}
           filterStatus={filterStatus} setFilterStatus={setFilterStatus} />
       )}
-      {view === "timeline" && <Timeline solutions={solutions} onSelect={handleSelect} />}
+      {!dataLoading && view === "timeline" && solutions.length > 0 && (
+        <Timeline solutions={solutions} onSelect={handleSelect} />
+      )}
       {view === "detail" && selected && (
         <SolutionDetail solution={selected} onBack={() => setView("solutions")} />
       )}
