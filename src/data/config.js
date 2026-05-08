@@ -10,7 +10,7 @@ export const AUTH_CONFIG = {
   clientId: "Ov23liUqmgzm5WUGJmfu",
 
   // Cloudflare Worker URL (the token exchange proxy)
-  workerUrl: "https://solution-tracker-auth.ccc-st.workers.dev/",
+  workerUrl: "https://solution-tracker-auth.ccc-st.workers.dev",
 
   // Where GitHub redirects after auth — must match your OAuth App settings
   redirectUri: "https://ccc-mtzeng.github.io/ccc-project-dashboard/",
