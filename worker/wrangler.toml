@@ -1,0 +1,9 @@
+name = "solution-tracker-auth"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+# Secrets are set via: wrangler secret put <NAME>
+# Required secrets:
+#   GITHUB_CLIENT_ID
+#   GITHUB_CLIENT_SECRET
+#   ALLOWED_ORIGIN
