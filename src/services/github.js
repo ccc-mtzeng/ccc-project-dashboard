@@ -150,6 +150,46 @@ export async function saveSolution(solution) {
   return { sha: newSha };
 }
 
+// ─── Timesheet helpers ─────────────────────────────────────────────
+
+/**
+ * Load the Kantata activities config.
+ */
+export async function loadActivities() {
+  const result = await readFile("config/activities.json");
+  return result ? result : { data: [], sha: null };
+}
+
+/**
+ * Save the Kantata activities config.
+ */
+export async function saveActivities(activities, sha = null) {
+  if (!sha) {
+    const existing = await readFile("config/activities.json");
+    sha = existing?.sha || null;
+  }
+  return writeFile("config/activities.json", activities, sha, "Update activities");
+}
+
+/**
+ * Load a weekly timesheet. weekKey is ISO format: "2026-W19"
+ */
+export async function loadTimesheet(weekKey) {
+  const result = await readFile(`timesheets/${weekKey}.json`);
+  return result ? result : { data: { week: weekKey, entries: [] }, sha: null };
+}
+
+/**
+ * Save a weekly timesheet.
+ */
+export async function saveTimesheet(weekKey, data, sha = null) {
+  if (!sha) {
+    const existing = await readFile(`timesheets/${weekKey}.json`);
+    sha = existing?.sha || null;
+  }
+  return writeFile(`timesheets/${weekKey}.json`, data, sha, `Update timesheet ${weekKey}`);
+}
+
 /**
  * Delete a solution and remove it from the index.
  */

@@ -5,10 +5,12 @@ import SolutionList from "./components/SolutionList";
 import SolutionDetail from "./components/SolutionDetail";
 import Timeline from "./components/Timeline";
 import SolutionUpload from "./components/SolutionUpload";
+import Timesheet from "./components/Timesheet";
 import { NAV_ITEMS } from "./data/constants";
 import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
-import { configure, isConfigured, loadIndex, loadSolution, saveSolution } from "./services/github";
+import { configure, isConfigured, loadIndex, loadSolution, saveSolution, loadActivities, saveActivities, loadTimesheet, saveTimesheet } from "./services/github";
+import { isoWeekKey, todayISO } from "./data/utils";
 
 const pillStyle = {
   fontSize: 12, padding: "4px 10px", borderRadius: 99, cursor: "pointer",
@@ -29,6 +31,14 @@ export default function App() {
   const [solutions, setSolutions] = useState([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState("");
+
+  // Timesheet state
+  const [currentWeek, setCurrentWeek] = useState(isoWeekKey(todayISO()));
+  const [timesheet, setTimesheet] = useState(null);
+  const [timesheetSha, setTimesheetSha] = useState(null);
+  const [timesheetLoading, setTimesheetLoading] = useState(false);
+  const [activities, setActivities] = useState([]);
+  const [activitiesSha, setActivitiesSha] = useState(null);
 
   // Handle OAuth callback on mount
   useEffect(() => {
@@ -104,6 +114,45 @@ export default function App() {
       fetchSolutions();
     }
   }, [auth, fetchSolutions]);
+
+  // Load activities once on auth
+  useEffect(() => {
+    if (auth && isConfigured()) {
+      loadActivities().then((result) => {
+        setActivities(result.data || []);
+        setActivitiesSha(result.sha);
+      }).catch((err) => console.warn("Failed to load activities:", err));
+    }
+  }, [auth]);
+
+  // Load timesheet when week changes
+  useEffect(() => {
+    if (!auth || !isConfigured()) return;
+    setTimesheetLoading(true);
+    loadTimesheet(currentWeek)
+      .then((result) => {
+        setTimesheet(result.data);
+        setTimesheetSha(result.sha);
+      })
+      .catch((err) => {
+        console.warn("Failed to load timesheet:", err);
+        setTimesheet({ week: currentWeek, entries: [] });
+        setTimesheetSha(null);
+      })
+      .finally(() => setTimesheetLoading(false));
+  }, [auth, currentWeek]);
+
+  async function handleTimesheetSave(weekKey, data, sha) {
+    const result = await saveTimesheet(weekKey, data, sha);
+    setTimesheet(data);
+    setTimesheetSha(result.sha);
+  }
+
+  async function handleActivitiesSave(updatedActivities) {
+    const result = await saveActivities(updatedActivities, activitiesSha);
+    setActivities(updatedActivities);
+    setActivitiesSha(result.sha);
+  }
 
   function handleLogout() {
     clearAuth();
@@ -253,7 +302,7 @@ export default function App() {
       )}
 
       {/* Empty state */}
-      {!dataLoading && !dataError && solutions.length === 0 && view !== "upload" && (
+      {!dataLoading && !dataError && solutions.length === 0 && view !== "upload" && view !== "timesheet" && (
         <div style={{ textAlign: "center", padding: "48px 20px" }}>
           <i
             className="ti ti-folder-off"
@@ -306,6 +355,19 @@ export default function App() {
           workerUrl={AUTH_CONFIG.workerUrl}
           onSaved={handleSolutionSaved}
           solutions={solutions}
+        />
+      )}
+      {view === "timesheet" && (
+        <Timesheet
+          activities={activities}
+          timesheet={timesheet}
+          timesheetSha={timesheetSha}
+          solutions={solutions}
+          onSave={handleTimesheetSave}
+          onSaveActivities={handleActivitiesSave}
+          onWeekChange={setCurrentWeek}
+          currentWeek={currentWeek}
+          loading={timesheetLoading}
         />
       )}
     </div>
