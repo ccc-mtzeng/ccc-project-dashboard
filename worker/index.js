@@ -95,7 +95,10 @@ export default {
       return handleParsePDF(request, env);
     }
 
-    return new Response("Not found", { status: 404 });
+    return new Response("Not found", {
+      status: 404,
+      headers: corsHeaders(env.ALLOWED_ORIGIN),
+    });
   },
 };
 
