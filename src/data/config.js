@@ -9,7 +9,7 @@ export const AUTH_CONFIG = {
   // GitHub OAuth App client ID (public, safe to commit)
   clientId: "Ov23liUqmgzm5WUGJmfu",
 
-  // Cloudflare Worker URL (the token exchange proxy)
+  // Cloudflare Worker URL (handles token exchange + PDF parsing)
   workerUrl: "https://solution-tracker-auth.ccc-st.workers.dev",
 
   // Where GitHub redirects after auth — must match your OAuth App settings
@@ -23,5 +23,5 @@ export const AUTH_CONFIG = {
 export const DATA_CONFIG = {
   // The private repo where solution JSON files are stored
   owner: "ccc-mtzeng",
-  repo: "ccc-solution-data",
+  repo: "ccc-project-data",
 };

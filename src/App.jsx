@@ -4,9 +4,10 @@ import Dashboard from "./components/Dashboard";
 import SolutionList from "./components/SolutionList";
 import SolutionDetail from "./components/SolutionDetail";
 import Timeline from "./components/Timeline";
+import SolutionUpload from "./components/SolutionUpload";
 import { SEED_SOLUTIONS } from "./data/solutions";
 import { NAV_ITEMS } from "./data/constants";
-import { DATA_CONFIG } from "./data/config";
+import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
 import { configure } from "./services/github";
 
@@ -70,12 +71,19 @@ export default function App() {
     return <Login error={authError} loading={authLoading} />;
   }
 
-  // TODO: Replace with GitHub API loading once data repo is set up
+  // TODO: Replace with GitHub API loading once data repo is seeded
   const solutions = SEED_SOLUTIONS;
   const selected = solutions.find((s) => s.id === selectedId);
 
   function handleSelect(id) {
     setSelectedId(id);
+    setView("detail");
+  }
+
+  function handleSolutionSaved(sol) {
+    // After saving a new solution via upload, navigate to it
+    // (Once wired to live data, this would trigger a refresh)
+    setSelectedId(sol.id);
     setView("detail");
   }
 
@@ -149,6 +157,12 @@ export default function App() {
       {view === "timeline" && <Timeline solutions={solutions} onSelect={handleSelect} />}
       {view === "detail" && selected && (
         <SolutionDetail solution={selected} onBack={() => setView("solutions")} />
+      )}
+      {view === "upload" && (
+        <SolutionUpload
+          workerUrl={AUTH_CONFIG.workerUrl}
+          onSaved={handleSolutionSaved}
+        />
       )}
     </div>
   );
