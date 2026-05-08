@@ -91,10 +91,11 @@ const btnSecondary = {
 
 // ─── Component ───────────────────────────────────────────────────────
 
-export default function SolutionUpload({ onSaved, workerUrl }) {
-  const [stage, setStage] = useState("idle"); // idle | extracting | parsing | review | saving | done | error
+export default function SolutionUpload({ onSaved, workerUrl, solutions: existingSolutions = [] }) {
+  const [stage, setStage] = useState("idle"); // idle | extracting | parsing | match | review | saving | done | error
   const [file, setFile] = useState(null);
   const [solution, setSolution] = useState(null);
+  const [matchedExisting, setMatchedExisting] = useState(null);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef(null);
@@ -148,8 +149,16 @@ export default function SolutionUpload({ onSaved, workerUrl }) {
       sol.id = sol.id || slugify(`${sol.customer}-${sol.title}`);
       sol.date_created = sol.date_created || todayISO();
 
-      setSolution(sol);
-      setStage("review");
+      // Check for existing solution with same slug
+      const existing = existingSolutions.find((s) => s.id === sol.id);
+      if (existing) {
+        setMatchedExisting(existing);
+        setSolution(sol);
+        setStage("match");
+      } else {
+        setSolution(sol);
+        setStage("review");
+      }
     } catch (err) {
       setError(err.message || "Failed to parse PDF");
       setStage("error");
@@ -186,7 +195,49 @@ export default function SolutionUpload({ onSaved, workerUrl }) {
     setStage("idle");
     setFile(null);
     setSolution(null);
+    setMatchedExisting(null);
     setError("");
+  }
+
+  // ── Duplicate match handlers ──
+
+  function handleUpdateExisting() {
+    // Merge: keep existing actual_hours and task statuses, use new estimates/structure
+    const existing = matchedExisting;
+    const newVersion = String(
+      (parseFloat(existing.version || "1.0") + 0.1).toFixed(1)
+    );
+    const merged = {
+      ...solution,
+      id: existing.id,
+      version: newVersion,
+      date_created: existing.date_created,
+      // Carry over actual_hours and status from matching tasks
+      tasks: solution.tasks.map((newTask) => {
+        const oldTask = existing.tasks.find(
+          (t) => t.name === newTask.name && t.category === newTask.category
+        );
+        if (oldTask) {
+          return {
+            ...newTask,
+            actual_hours: oldTask.actual_hours,
+            status: oldTask.status,
+          };
+        }
+        return newTask;
+      }),
+    };
+    setSolution(merged);
+    setMatchedExisting(null);
+    setStage("review");
+  }
+
+  function handleCreateNew() {
+    // Append a suffix to make the ID unique
+    const sol = { ...solution, id: solution.id + "-v2" };
+    setSolution(sol);
+    setMatchedExisting(null);
+    setStage("review");
   }
 
   // ── Render ──
@@ -263,6 +314,15 @@ export default function SolutionUpload({ onSaved, workerUrl }) {
           subtitle="Extracting tasks, tags, and hours via GitHub Models"
         />
       )}
+      {stage === "match" && matchedExisting && (
+        <MatchPrompt
+          parsed={solution}
+          existing={matchedExisting}
+          onUpdate={handleUpdateExisting}
+          onCreate={handleCreateNew}
+          onCancel={reset}
+        />
+      )}
       {stage === "review" && solution && (
         <ReviewForm
           solution={solution}
@@ -287,6 +347,70 @@ export default function SolutionUpload({ onSaved, workerUrl }) {
           <UploadZone {...{ dragOver, setDragOver, handleFiles, fileRef }} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Duplicate match prompt ──────────────────────────────────────────
+
+function MatchPrompt({ parsed, existing, onUpdate, onCreate, onCancel }) {
+  const actual = existing.tasks.reduce((a, t) => a + t.actual_hours, 0);
+  return (
+    <div style={{ ...cardStyle, padding: 24 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 16,
+          fontSize: 14,
+          fontWeight: 600,
+          color: "#BA7517",
+        }}
+      >
+        <i className="ti ti-alert-triangle" style={{ fontSize: 18 }} />
+        Existing solution detected
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16, lineHeight: 1.6 }}>
+        <strong style={{ color: "var(--text-primary)" }}>{parsed.customer} — {parsed.title}</strong> matches
+        an existing solution (v{existing.version}, {existing.status.replace("_", " ")}, {actual}/{existing.total_hours}h logged).
+      </div>
+
+      <div style={{ display: "flex", gap: 10 }}>
+        <button
+          onClick={onUpdate}
+          style={{
+            ...btnPrimary,
+            flex: 1,
+            justifyContent: "center",
+          }}
+        >
+          <i className="ti ti-refresh" style={{ fontSize: 15 }} />
+          Update existing (bump to v{(parseFloat(existing.version || "1.0") + 0.1).toFixed(1)})
+        </button>
+        <button
+          onClick={onCreate}
+          style={{
+            ...btnSecondary,
+            flex: 1,
+            justifyContent: "center",
+          }}
+        >
+          <i className="ti ti-plus" style={{ fontSize: 15 }} />
+          Create as new solution
+        </button>
+      </div>
+      <button
+        onClick={onCancel}
+        style={{
+          fontFamily: "inherit", fontSize: 12,
+          color: "var(--text-secondary)", background: "none",
+          border: "none", cursor: "pointer", marginTop: 10,
+          padding: 0,
+        }}
+      >
+        Cancel
+      </button>
     </div>
   );
 }

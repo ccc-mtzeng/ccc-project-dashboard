@@ -25,10 +25,13 @@ export default function SolutionList({
   setFilterStatus,
 }) {
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
+  const [showExcluded, setShowExcluded] = useState(false);
   const allTaxonomyKeys = Object.keys(TAG_TAXONOMY);
   const activeTagInfo = filterTag ? TAG_TAXONOMY[filterTag] : null;
+  const excludedCount = solutions.filter((s) => s.excluded).length;
 
   const filtered = solutions.filter((s) => {
+    if (!showExcluded && s.excluded) return false;
     if (filterStatus && s.status !== filterStatus) return false;
     if (filterTag && !s.tags.some((t) => t.startsWith(filterTag))) return false;
     return true;
@@ -233,6 +236,26 @@ export default function SolutionList({
             Clear
           </button>
         )}
+
+        {/* Show excluded toggle */}
+        {excludedCount > 0 && (
+          <button
+            onClick={() => setShowExcluded(!showExcluded)}
+            style={{
+              ...pillStyle,
+              marginLeft: "auto",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              color: showExcluded ? "var(--text-primary)" : "var(--text-secondary)",
+              background: showExcluded ? "var(--bg-secondary)" : "transparent",
+              fontSize: 11,
+            }}
+          >
+            <i className={`ti ${showExcluded ? "ti-eye" : "ti-eye-off"}`} style={{ fontSize: 13 }} />
+            {excludedCount} excluded
+          </button>
+        )}
       </div>
 
       {/* Solution cards */}
@@ -253,6 +276,7 @@ export default function SolutionList({
                 display: "flex",
                 gap: 14,
                 alignItems: "center",
+                opacity: s.excluded ? 0.5 : 1,
               }}
               onMouseOver={(e) =>
                 (e.currentTarget.style.borderColor = "var(--border-mid)")
@@ -270,6 +294,9 @@ export default function SolutionList({
                     marginBottom: 4,
                   }}
                 >
+                  {s.excluded && (
+                    <i className="ti ti-eye-off" style={{ fontSize: 13, color: "var(--text-secondary)" }} />
+                  )}
                   <span
                     style={{
                       fontSize: 14,

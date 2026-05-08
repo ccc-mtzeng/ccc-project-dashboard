@@ -8,7 +8,7 @@ import SolutionUpload from "./components/SolutionUpload";
 import { NAV_ITEMS } from "./data/constants";
 import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
-import { configure, isConfigured, loadIndex, loadSolution } from "./services/github";
+import { configure, isConfigured, loadIndex, loadSolution, saveSolution } from "./services/github";
 
 const pillStyle = {
   fontSize: 12, padding: "4px 10px", borderRadius: 99, cursor: "pointer",
@@ -77,7 +77,6 @@ export default function App() {
         return;
       }
 
-      // Load all solutions in parallel
       const results = await Promise.all(
         index.map((entry) =>
           loadSolution(entry.id).catch((err) => {
@@ -119,6 +118,8 @@ export default function App() {
     return <Login error={authError} loading={authLoading} />;
   }
 
+  // Active solutions = not excluded (for Dashboard + Timeline)
+  const activeSolutions = solutions.filter((s) => !s.excluded);
   const selected = solutions.find((s) => s.id === selectedId);
 
   function handleSelect(id) {
@@ -127,11 +128,16 @@ export default function App() {
   }
 
   function handleSolutionSaved(sol) {
-    // Refresh the full list, then navigate to the new solution
     fetchSolutions().then(() => {
       setSelectedId(sol.id);
       setView("detail");
     });
+  }
+
+  // Save handler for detail view (exclude/restore)
+  async function handleDetailSave(updatedSolution) {
+    await saveSolution(updatedSolution);
+    await fetchSolutions();
   }
 
   return (
@@ -274,25 +280,32 @@ export default function App() {
         </div>
       )}
 
-      {/* Views */}
-      {!dataLoading && view === "dashboard" && solutions.length > 0 && (
-        <Dashboard solutions={solutions} onSelect={handleSelect} />
+      {/* Views — Dashboard and Timeline use activeSolutions (excludes excluded) */}
+      {!dataLoading && view === "dashboard" && activeSolutions.length > 0 && (
+        <Dashboard solutions={activeSolutions} onSelect={handleSelect} />
+      )}
+      {/* Show empty dashboard message if all solutions are excluded */}
+      {!dataLoading && view === "dashboard" && solutions.length > 0 && activeSolutions.length === 0 && (
+        <div style={{ textAlign: "center", padding: "48px 20px", color: "var(--text-secondary)", fontSize: 13 }}>
+          All solutions are currently excluded. Check the Solutions view to restore them.
+        </div>
       )}
       {!dataLoading && view === "solutions" && solutions.length > 0 && (
         <SolutionList solutions={solutions} onSelect={handleSelect}
           filterTag={filterTag} setFilterTag={setFilterTag}
           filterStatus={filterStatus} setFilterStatus={setFilterStatus} />
       )}
-      {!dataLoading && view === "timeline" && solutions.length > 0 && (
-        <Timeline solutions={solutions} onSelect={handleSelect} />
+      {!dataLoading && view === "timeline" && activeSolutions.length > 0 && (
+        <Timeline solutions={activeSolutions} onSelect={handleSelect} />
       )}
       {view === "detail" && selected && (
-        <SolutionDetail solution={selected} onBack={() => setView("solutions")} />
+        <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} />
       )}
       {view === "upload" && (
         <SolutionUpload
           workerUrl={AUTH_CONFIG.workerUrl}
           onSaved={handleSolutionSaved}
+          solutions={solutions}
         />
       )}
     </div>
