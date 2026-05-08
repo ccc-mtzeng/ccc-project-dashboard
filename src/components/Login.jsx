@@ -25,7 +25,7 @@ export default function Login({ error, loading }) {
           }}
         >
           <i className="ti ti-chart-bar" style={{ fontSize: 24 }} aria-hidden="true" />
-          Solution tracker
+          Solution Tracker
         </div>
         <div
           style={{

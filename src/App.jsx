@@ -157,7 +157,7 @@ export default function App() {
           }}
         >
           <i className="ti ti-chart-bar" style={{ fontSize: 18 }} aria-hidden="true" />
-          Solution tracker
+          Solution Tracker
         </div>
 
         {NAV_ITEMS.map((n) => {

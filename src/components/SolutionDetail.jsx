@@ -254,6 +254,45 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
         })}
       </div>
 
+      {/* Design document link */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 14,
+        }}
+      >
+        <i className="ti ti-file-text" style={{ fontSize: 15, color: "var(--text-secondary)", flexShrink: 0 }} />
+        <input
+          value={draft.design_url || ""}
+          onChange={(e) => updateDraft("design_url", e.target.value)}
+          placeholder="Paste link to solution design document…"
+          style={{
+            fontFamily: "inherit", fontSize: 12, padding: "5px 8px", borderRadius: 6,
+            border: "1px solid var(--border-light)", background: "var(--bg-primary)",
+            color: "var(--text-primary)", flex: 1, boxSizing: "border-box",
+          }}
+        />
+        {draft.design_url && (
+          <a
+            href={draft.design_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              fontFamily: "inherit", fontSize: 12, padding: "4px 10px", borderRadius: 6,
+              border: "1px solid var(--border-light)", background: "transparent",
+              color: "var(--text-primary)", textDecoration: "none", flexShrink: 0,
+              display: "flex", alignItems: "center", gap: 4,
+            }}
+          >
+            <i className="ti ti-external-link" style={{ fontSize: 13 }} />
+            Open
+          </a>
+        )}
+      </div>
+
       {/* Editable notes */}
       <textarea
         value={draft.notes || ""}

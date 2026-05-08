@@ -723,6 +723,14 @@ function ReviewForm({ solution, setSolution, onSave, onCancel, filename }) {
               onChange={(e) => update("notes", e.target.value)}
             />
           </Field>
+          <Field label="Design document link" span={2}>
+            <input
+              style={inputStyle}
+              placeholder="https://… (SharePoint, OneDrive, Google Drive, etc.)"
+              value={solution.design_url || ""}
+              onChange={(e) => update("design_url", e.target.value)}
+            />
+          </Field>
         </div>
       </div>
 
