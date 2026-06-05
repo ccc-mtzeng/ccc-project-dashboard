@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import StatCard from "./shared/StatCard";
+import TimeEntryImport from "./TimeEntryImport";
 import { CATEGORY_COLORS } from "../data/constants";
 import {
   todayISO,
@@ -89,6 +90,7 @@ export default function Timesheet({
   onWeekChange,
   currentWeek,
   loading,
+  onRefresh,
 }) {
   const [entries, setEntries] = useState(timesheet?.entries || []);
   const [addingTo, setAddingTo] = useState(null); // date string or "burn"
@@ -234,6 +236,21 @@ export default function Timesheet({
     );
   }
 
+  // ── Import entries sub-view ─────────────────────────────────────
+
+  if (subView === "import-entries") {
+    return (
+      <TimeEntryImport
+        activities={activities}
+        onComplete={() => {
+          setSubView("week");
+          if (typeof onRefresh === "function") onRefresh();
+        }}
+        onCancel={() => setSubView("week")}
+      />
+    );
+  }
+
   // ── Main weekly view ──────────────────────────────────────────────
 
   return (
@@ -317,6 +334,13 @@ export default function Timesheet({
           >
             <i className="ti ti-settings" style={{ fontSize: 13 }} />
             Activities
+          </button>
+          <button
+            onClick={() => setSubView("import-entries")}
+            style={{ ...pillBtn, color: "var(--text-secondary)" }}
+          >
+            <i className="ti ti-file-import" style={{ fontSize: 13 }} />
+            Import
           </button>
         </div>
       </div>

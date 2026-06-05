@@ -154,6 +154,25 @@ export default function App() {
     setActivitiesSha(result.sha);
   }
 
+  async function handleRefresh() {
+    // Reload activities
+    try {
+      const actResult = await loadActivities();
+      setActivities(actResult.data || []);
+      setActivitiesSha(actResult.sha);
+    } catch (err) {
+      console.warn("Failed to reload activities:", err);
+    }
+    // Reload current week's timesheet
+    try {
+      const tsResult = await loadTimesheet(currentWeek);
+      setTimesheet(tsResult.data);
+      setTimesheetSha(tsResult.sha);
+    } catch (err) {
+      console.warn("Failed to reload timesheet:", err);
+    }
+  }
+
   function handleLogout() {
     clearAuth();
     setAuth(null);
@@ -368,6 +387,7 @@ export default function App() {
           onWeekChange={setCurrentWeek}
           currentWeek={currentWeek}
           loading={timesheetLoading}
+          onRefresh={handleRefresh}
         />
       )}
     </div>
