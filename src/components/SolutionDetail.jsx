@@ -44,8 +44,15 @@ const miniDateStyle = {
   cursor: "pointer",
 };
 
-export default function SolutionDetail({ solution, onBack, onSave, username }) {
-  // Editable draft — resets when solution prop changes
+const labelStyle = {
+  fontSize: 11,
+  fontWeight: 600,
+  color: "var(--text-secondary)",
+  textTransform: "uppercase",
+  letterSpacing: "0.03em",
+};
+
+export default function SolutionDetail({ solution, onBack, onSave, username, activities = [] }) {
   const [draft, setDraft] = useState(structuredClone(solution));
   const [showExcludeForm, setShowExcludeForm] = useState(false);
   const [excludeNote, setExcludeNote] = useState(solution.excluded_note || "");
@@ -58,14 +65,27 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
     setExcludeNote(solution.excluded_note || "");
   }, [solution.id]);
 
-  // Dirty detection
   const isDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(solution),
     [draft, solution]
   );
 
   const sc = STATUS_CONFIG[draft.status] || STATUS_CONFIG.draft;
-  const actual = draft.tasks.reduce((a, t) => a + (Number(t.actual_hours) || 0), 0);
+
+  // Weighted overall progress from percent_complete
+  const overallProgress = useMemo(() => {
+    const tasks = draft.tasks;
+    if (!tasks.length) return 0;
+    const totalEst = tasks.reduce((s, t) => s + (t.estimated_hours || 0), 0);
+    if (totalEst > 0) {
+      return Math.round(
+        tasks.reduce((s, t) => s + (t.percent_complete || 0) * (t.estimated_hours || 0), 0) / totalEst
+      );
+    }
+    return Math.round(tasks.reduce((s, t) => s + (t.percent_complete || 0), 0) / tasks.length);
+  }, [draft.tasks]);
+
+  const completedCount = draft.tasks.filter((t) => t.status === "complete").length;
 
   // ── Edit helpers ──
 
@@ -118,8 +138,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
     }
   }
 
-  // ── Exclude / restore ──
-
   async function handleExclude() {
     if (!onSave) return;
     setSaving(true);
@@ -140,6 +158,9 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
       setSaving(false);
     }
   }
+
+  // Linked activity display
+  const linkedActivity = activities.find((a) => a.id === draft.activity_id);
 
   return (
     <div>
@@ -194,7 +215,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         >
           {draft.title}
         </h2>
-        {/* Editable status */}
         <select
           value={draft.status}
           onChange={(e) => updateDraft("status", e.target.value)}
@@ -244,49 +264,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         )}
       </div>
 
-      {/* Editable dates */}
-      <div
-        style={{
-          display: "flex", gap: 16, marginBottom: 16, flexWrap: "wrap",
-          alignItems: "center",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-            Created
-          </span>
-          <input
-            type="date"
-            value={draft.date_created || ""}
-            onChange={(e) => updateDraft("date_created", e.target.value)}
-            style={miniDateStyle}
-          />
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-            Go-live
-          </span>
-          <input
-            type="date"
-            value={draft.go_live_date || ""}
-            onChange={(e) => updateDraft("go_live_date", e.target.value)}
-            style={{
-              ...miniDateStyle,
-              borderColor: draft.go_live_date && daysUntil(draft.go_live_date).includes("ago")
-                ? "rgba(226,75,74,0.5)" : "var(--border-light)",
-            }}
-          />
-          {draft.go_live_date && (
-            <span style={{
-              fontSize: 11, fontWeight: 500,
-              color: daysUntil(draft.go_live_date).includes("ago") ? "#E24B4A" : "var(--text-secondary)",
-            }}>
-              {daysUntil(draft.go_live_date)}
-            </span>
-          )}
-        </div>
-      </div>
-
       {/* Exclude form */}
       {showExcludeForm && (
         <div
@@ -298,8 +275,8 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         >
           <div style={{ flex: 1 }}>
             <label style={{
-              fontSize: 11, fontWeight: 600, color: "var(--text-secondary)",
-              textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4, display: "block",
+              ...labelStyle,
+              marginBottom: 4, display: "block",
             }}>Reason (optional)</label>
             <input
               style={{
@@ -331,6 +308,72 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
           const info = getTagInfo(t);
           return <Badge key={t} {...info} />;
         })}
+      </div>
+
+      {/* Editable dates + engagement */}
+      <div
+        style={{
+          display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={labelStyle}>Created</span>
+          <input
+            type="date"
+            value={draft.date_created || ""}
+            onChange={(e) => updateDraft("date_created", e.target.value)}
+            style={miniDateStyle}
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={labelStyle}>Go-live</span>
+          <input
+            type="date"
+            value={draft.go_live_date || ""}
+            onChange={(e) => updateDraft("go_live_date", e.target.value)}
+            style={{
+              ...miniDateStyle,
+              borderColor: draft.go_live_date && daysUntil(draft.go_live_date).includes("ago")
+                ? "rgba(226,75,74,0.5)" : "var(--border-light)",
+            }}
+          />
+          {draft.go_live_date && (
+            <span style={{
+              fontSize: 11, fontWeight: 500,
+              color: daysUntil(draft.go_live_date).includes("ago") ? "#E24B4A" : "var(--text-secondary)",
+            }}>
+              {daysUntil(draft.go_live_date)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Engagement link */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+        <span style={labelStyle}>Engagement</span>
+        <select
+          value={draft.activity_id || ""}
+          onChange={(e) => updateDraft("activity_id", e.target.value || null)}
+          style={{
+            ...miniSelectStyle,
+            fontSize: 12,
+            padding: "4px 8px",
+            maxWidth: 360,
+          }}
+        >
+          <option value="">— None —</option>
+          {activities.filter((a) => !a.archived).map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.customer} — {a.label || a.code}
+            </option>
+          ))}
+        </select>
+        {linkedActivity && (
+          <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+            {linkedActivity.id.toUpperCase()}
+          </span>
+        )}
       </div>
 
       {/* Design document link */}
@@ -386,29 +429,19 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         }}
       />
 
-      {/* Stats row */}
+      {/* Stats row — progress-focused */}
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
-        <StatCard icon="clock" label="Estimated" value={`${draft.total_hours}h`} />
+        <StatCard icon="percentage" label="Progress" value={`${overallProgress}%`} />
         <StatCard
-          icon="player-play" label="Actual"
-          value={`${actual}h`}
-          valueColor={actual > draft.total_hours && draft.total_hours > 0 ? "#E24B4A" : undefined}
+          icon="list-check"
+          label="Tasks"
+          value={`${completedCount}/${draft.tasks.length}`}
+          sub={completedCount === draft.tasks.length && draft.tasks.length > 0 ? "All complete" : undefined}
         />
-        <StatCard
-          icon="percentage"
-          label="Progress"
-          value={`${draft.total_hours ? Math.round((actual / draft.total_hours) * 100) : 0}%`}
-          valueColor={actual > draft.total_hours && draft.total_hours > 0 ? "#E24B4A" : undefined}
-        />
-        <StatCard
-          icon="plus-minus"
-          label="Variance"
-          value={`${actual - draft.total_hours > 0 ? "+" : ""}${(actual - draft.total_hours).toFixed(1)}h`}
-          valueColor={actual > draft.total_hours ? "#E24B4A" : actual < draft.total_hours ? "#1D9E75" : undefined}
-        />
+        <StatCard icon="clock" label="Estimated" value={`${draft.total_hours}h`} sub="from solution design" />
       </div>
 
-      {/* Task table — editable actual_hours and status */}
+      {/* Task table — % complete + status focused */}
       <div
         style={{
           border: "0.5px solid var(--border-light)",
@@ -419,7 +452,7 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 80px 90px 60px 70px 100px",
+            gridTemplateColumns: "1fr 80px 90px 80px 100px",
             padding: "8px 14px",
             background: "var(--bg-secondary)",
             fontSize: 11, fontWeight: 500, color: "var(--text-secondary)",
@@ -429,35 +462,32 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
           <span>Task</span>
           <span>Category</span>
           <span>Due</span>
-          <span style={{ textAlign: "right" }}>Est.</span>
-          <span style={{ textAlign: "right" }}>Actual</span>
+          <span style={{ textAlign: "right" }}>% Done</span>
           <span style={{ textAlign: "right" }}>Status</span>
         </div>
 
         {draft.tasks.map((t, i) => {
           const ts = TASK_STATUS[t.status] || TASK_STATUS.not_started;
           const catColor = CATEGORY_COLORS[t.category] || "#888";
-          const over = (Number(t.actual_hours) || 0) > t.estimated_hours && t.estimated_hours > 0;
-          const variance = (Number(t.actual_hours) || 0) - t.estimated_hours;
+          const pct = t.percent_complete || 0;
           const isOverdue = t.due_date && new Date(t.due_date + "T00:00:00") < new Date() && t.status !== "complete";
           return (
             <div
               key={i}
               style={{
                 display: "grid",
-                gridTemplateColumns: "1fr 80px 90px 60px 70px 100px",
+                gridTemplateColumns: "1fr 80px 90px 80px 100px",
                 padding: "8px 14px",
                 borderTop: "0.5px solid var(--border-light)",
                 alignItems: "center",
                 fontSize: 13,
-                background: over ? "rgba(226,75,74,0.04)" : "transparent",
               }}
             >
               <span style={{ color: "var(--text-primary)", fontWeight: 450, display: "flex", alignItems: "center", gap: 6 }}>
                 {t.name}
-                {over && (
-                  <span style={{ fontSize: 11, color: "#E24B4A", fontWeight: 500 }}>
-                    +{variance.toFixed(1)}h
+                {t.estimated_hours > 0 && (
+                  <span style={{ fontSize: 10, color: "var(--text-secondary)", fontWeight: 400 }}>
+                    {t.estimated_hours}h est
                   </span>
                 )}
               </span>
@@ -479,18 +509,10 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
                   }}
                 />
               </span>
-              <span style={{ textAlign: "right", color: "var(--text-secondary)" }}>
-                {t.estimated_hours}h
-              </span>
               <span style={{ textAlign: "right" }}>
-                <HourInput
-                  value={t.actual_hours}
-                  onChange={(val) => updateTask(i, "actual_hours", val)}
-                  style={{
-                    ...miniInputStyle,
-                    color: over ? "#E24B4A" : "var(--text-primary)",
-                    borderColor: over ? "rgba(226,75,74,0.4)" : "var(--border-light)",
-                  }}
+                <PercentInput
+                  value={pct}
+                  onChange={(val) => updateTask(i, "percent_complete", val)}
                 />
               </span>
               <span style={{ textAlign: "right" }}>
@@ -515,33 +537,27 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 80px 90px 60px 70px 100px",
+            gridTemplateColumns: "1fr 80px 90px 80px 100px",
             padding: "10px 14px",
             borderTop: "1.5px solid var(--border-mid)",
             fontSize: 13, fontWeight: 500,
           }}
         >
-          <span style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: 6 }}>
-            Total
-            {actual > draft.total_hours && draft.total_hours > 0 && (
-              <span style={{ fontSize: 11, color: "#E24B4A", fontWeight: 500 }}>
-                +{(actual - draft.total_hours).toFixed(1)}h over
-              </span>
-            )}
+          <span style={{ color: "var(--text-primary)" }}>
+            Overall
           </span>
           <span />
           <span />
-          <span style={{ textAlign: "right", color: "var(--text-secondary)" }}>
-            {draft.total_hours}h
+          <span style={{ textAlign: "right", color: "var(--text-primary)" }}>
+            {overallProgress}%
           </span>
-          <span style={{ textAlign: "right", color: actual > draft.total_hours ? "#E24B4A" : "var(--text-primary)" }}>
-            {actual}h
+          <span style={{ textAlign: "right", fontSize: 11, color: "var(--text-secondary)" }}>
+            {completedCount}/{draft.tasks.length} done
           </span>
-          <span />
         </div>
       </div>
 
-      {/* Hours breakdown bars */}
+      {/* Progress breakdown bars */}
       <div
         style={{
           marginTop: 18,
@@ -551,30 +567,22 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         }}
       >
         <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10, color: "var(--text-primary)" }}>
-          Hours breakdown
+          Progress
         </div>
         {draft.tasks.map((t, i) => {
           const catColor = CATEGORY_COLORS[t.category] || "#888";
-          const taskActual = Number(t.actual_hours) || 0;
-          const over = taskActual > t.estimated_hours && t.estimated_hours > 0;
+          const pct = t.percent_complete || 0;
           return (
             <div key={i} style={{ marginBottom: 8 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
                 <span style={{ color: "var(--text-secondary)" }}>{t.name}</span>
-                <span style={{ fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ color: over ? "#E24B4A" : "var(--text-primary)" }}>
-                    {taskActual}/{t.estimated_hours}h
-                  </span>
-                  {over && (
-                    <span style={{ fontSize: 10, color: "#E24B4A" }}>
-                      +{(taskActual - t.estimated_hours).toFixed(1)}
-                    </span>
-                  )}
+                <span style={{ fontWeight: 500, color: "var(--text-primary)" }}>
+                  {pct}%
                 </span>
               </div>
               <ProgressBar
-                value={taskActual}
-                max={t.estimated_hours}
+                value={pct}
+                max={100}
                 color={catColor}
                 height={5}
               />
@@ -596,7 +604,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
           Activity
         </div>
 
-        {/* New note input */}
         <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
           <input
             value={noteText}
@@ -627,7 +634,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
           </button>
         </div>
 
-        {/* Notes feed */}
         {(draft.notes_log || []).length === 0 && (
           <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "8px 0" }}>
             No activity yet. Add a note to track progress.
@@ -685,7 +691,7 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         ))}
       </div>
 
-      {/* Save bar — appears when changes are made */}
+      {/* Save bar */}
       {isDirty && (
         <div
           style={{
@@ -739,48 +745,55 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
   );
 }
 
-// ─── Hour input with proper zero/empty handling ──────────────────────
+// ─── Percent input (0–100) ─────────────────────────────────────────
 
-function HourInput({ value, onChange, style }) {
+function PercentInput({ value, onChange }) {
   const [text, setText] = useState(value == null || value === 0 ? "" : String(value));
 
-  // Sync from parent when the solution resets (e.g. navigating to a different one)
   useEffect(() => {
     setText(value == null || value === 0 ? "" : String(value));
   }, [value]);
 
   function handleChange(e) {
     const raw = e.target.value;
-    // Allow empty, digits, and one decimal point
-    if (raw === "" || /^\d*\.?\d*$/.test(raw)) {
+    if (raw === "" || /^\d{0,3}$/.test(raw)) {
       setText(raw);
-      // Update parent live so stats reflect as you type
-      onChange(raw === "" ? 0 : Number(raw) || 0);
+      const num = raw === "" ? 0 : Math.min(100, Number(raw) || 0);
+      onChange(num);
     }
   }
 
   function handleBlur() {
-    // Normalize: empty → show empty (value is 0), otherwise clean number
-    const num = text === "" ? 0 : Number(text) || 0;
+    const num = text === "" ? 0 : Math.min(100, Number(text) || 0);
     onChange(num);
     setText(num === 0 ? "" : String(num));
   }
 
-  function handleFocus(e) {
-    // Select all on focus for easy replacement
-    e.target.select();
-  }
-
   return (
-    <input
-      type="text"
-      inputMode="decimal"
-      value={text}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      onFocus={handleFocus}
-      placeholder="0"
-      style={style}
-    />
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={text}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onFocus={(e) => e.target.select()}
+        placeholder="0"
+        style={{
+          fontFamily: "inherit",
+          fontSize: 13,
+          padding: "3px 4px",
+          borderRadius: 4,
+          border: "1px solid var(--border-light)",
+          background: "var(--bg-primary)",
+          color: "var(--text-primary)",
+          textAlign: "right",
+          width: 38,
+          boxSizing: "border-box",
+          fontWeight: 500,
+        }}
+      />
+      <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>%</span>
+    </div>
   );
 }
