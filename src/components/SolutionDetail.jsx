@@ -518,7 +518,11 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
               <span style={{ textAlign: "right" }}>
                 <select
                   value={t.status}
-                  onChange={(e) => updateTask(i, "status", e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    updateTask(i, "status", val);
+                    if (val === "complete") updateTask(i, "percent_complete", 100);
+                  }}
                   style={{
                     ...miniSelectStyle,
                     color: ts.color,

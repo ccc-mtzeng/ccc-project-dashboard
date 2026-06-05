@@ -947,27 +947,13 @@ export default function Timesheet({
                             >
                               {act?.label || entry.activity_id}
                             </span>
-                            {entry.solution_id && (
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  padding: "1px 6px",
-                                  borderRadius: 99,
-                                  background: color + "18",
-                                  color,
-                                  fontWeight: 500,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: 3,
-                                }}
-                              >
-                                <i
-                                  className="ti ti-link"
-                                  style={{ fontSize: 10 }}
-                                />
-                                Solution
-                              </span>
-                            )}
+                            <SolutionTag
+                              entry={entry}
+                              solutions={solutions}
+                              onUpdate={(solutionId) =>
+                                updateEntry(entry.id, { solution_id: solutionId })
+                              }
+                            />
                             {entry.task_category && (
                               <span
                                 style={{
@@ -2156,6 +2142,175 @@ function ActivityManager({ activities, onSave, onBack }) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Solution Tag — inline picker to link a time entry to a solution
+// ═════════════════════════════════════════════════════════════════════
+
+function SolutionTag({ entry, solutions, onUpdate }) {
+  const [open, setOpen] = useState(false);
+
+  // Solutions linked to this entry's activity
+  const linked = useMemo(
+    () => (solutions || []).filter((s) => s.activity_id === entry.activity_id && !s.excluded),
+    [solutions, entry.activity_id]
+  );
+
+  // Nothing to tag if no solutions linked to this engagement
+  if (linked.length === 0 && !entry.solution_id) return null;
+
+  const current = solutions?.find((s) => s.id === entry.solution_id);
+
+  // Already tagged — show solution title as pill
+  if (current && !open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        style={{
+          fontSize: 10,
+          padding: "1px 6px",
+          borderRadius: 99,
+          background: "#185FA518",
+          color: "#185FA5",
+          fontWeight: 500,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          border: "none",
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+        title="Change or remove linked solution"
+      >
+        <i className="ti ti-link" style={{ fontSize: 10 }} />
+        {current.title.length > 30 ? current.title.slice(0, 28) + "…" : current.title}
+      </button>
+    );
+  }
+
+  // Not tagged but solutions available — show subtle link button
+  if (!current && !open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        style={{
+          fontSize: 10,
+          padding: "1px 6px",
+          borderRadius: 99,
+          background: "transparent",
+          color: "var(--text-tertiary)",
+          fontWeight: 500,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          border: "1px dashed var(--border-light)",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          opacity: 0.6,
+          transition: "opacity 0.15s",
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; }}
+        onMouseLeave={(e) => { e.currentTarget.style.opacity = 0.6; }}
+        title="Tag to a solution"
+      >
+        <i className="ti ti-link" style={{ fontSize: 10 }} />
+        Tag solution
+      </button>
+    );
+  }
+
+  // Open picker
+  return (
+    <div style={{ position: "relative", display: "inline-block" }}>
+      <div
+        style={{
+          position: "absolute",
+          top: -4,
+          left: 0,
+          zIndex: 20,
+          background: "var(--bg-primary)",
+          border: "1px solid var(--border-mid)",
+          borderRadius: 8,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+          minWidth: 200,
+          maxWidth: 300,
+          padding: 4,
+        }}
+      >
+        {linked.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => { onUpdate(s.id); setOpen(false); }}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "none",
+              background: s.id === entry.solution_id ? "#185FA510" : "transparent",
+              cursor: "pointer",
+              fontFamily: "inherit",
+              fontSize: 12,
+              color: "var(--text-primary)",
+              fontWeight: s.id === entry.solution_id ? 500 : 400,
+            }}
+            onMouseEnter={(e) => { if (s.id !== entry.solution_id) e.currentTarget.style.background = "var(--bg-secondary)"; }}
+            onMouseLeave={(e) => { if (s.id !== entry.solution_id) e.currentTarget.style.background = "transparent"; }}
+          >
+            <div style={{ fontWeight: 500 }}>{s.title}</div>
+            <div style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 1 }}>
+              {s.customer} · {s.status}
+            </div>
+          </button>
+        ))}
+        {entry.solution_id && (
+          <button
+            onClick={() => { onUpdate(null); setOpen(false); }}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontFamily: "inherit",
+              fontSize: 11,
+              color: "#E24B4A",
+              borderTop: "0.5px solid var(--border-light)",
+              marginTop: 2,
+            }}
+          >
+            <i className="ti ti-link-off" style={{ fontSize: 11, marginRight: 4 }} />
+            Remove link
+          </button>
+        )}
+        <button
+          onClick={() => setOpen(false)}
+          style={{
+            display: "block",
+            width: "100%",
+            textAlign: "left",
+            padding: "5px 10px",
+            borderRadius: 6,
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            fontSize: 10,
+            color: "var(--text-tertiary)",
+            borderTop: "0.5px solid var(--border-light)",
+            marginTop: 2,
+          }}
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
