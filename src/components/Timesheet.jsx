@@ -1534,6 +1534,7 @@ function ActivityManager({ activities, onSave, onBack }) {
   const [list, setList] = useState(activities);
   const [editing, setEditing] = useState(null); // id or "new"
   const [saving, setSaving] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
 
   const isDirty =
     JSON.stringify(list) !== JSON.stringify(activities);
@@ -1577,6 +1578,143 @@ function ActivityManager({ activities, onSave, onBack }) {
       setList((prev) => prev.map((a) => (a.id === id ? updated : a)));
     }
     setEditing(null);
+  }
+
+  // ── CSV import ──────────────────────────────────────────────────
+  function handleCsvImport(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ""; // reset for re-import
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = evt.target.result;
+      const lines = text.split("\n");
+      if (lines.length < 2) {
+        setImportMsg("CSV appears empty.");
+        return;
+      }
+
+      // Simple CSV parser that handles quoted fields with commas/quotes
+      function parseCsvLine(line) {
+        const fields = [];
+        let current = "";
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (inQuotes) {
+            if (ch === '"' && line[i + 1] === '"') {
+              current += '"';
+              i++;
+            } else if (ch === '"') {
+              inQuotes = false;
+            } else {
+              current += ch;
+            }
+          } else {
+            if (ch === '"') {
+              inQuotes = true;
+            } else if (ch === ",") {
+              fields.push(current.trim());
+              current = "";
+            } else {
+              current += ch;
+            }
+          }
+        }
+        fields.push(current.trim());
+        return fields;
+      }
+
+      const header = parseCsvLine(lines[0]);
+      const actIdx = header.findIndex(
+        (h) => h.toLowerCase() === "activity"
+      );
+      const acctIdx = header.findIndex(
+        (h) => h.toLowerCase() === "account"
+      );
+
+      if (actIdx === -1) {
+        setImportMsg("CSV missing 'Activity' column.");
+        return;
+      }
+
+      // Collect unique activities
+      const seen = {};
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const fields = parseCsvLine(line);
+        const activity = fields[actIdx]?.trim();
+        const account = acctIdx >= 0 ? fields[acctIdx]?.trim() : "";
+        if (!activity || seen[activity]) continue;
+
+        // Extract E-code
+        const ecodeMatch = activity.match(/^(E\d+-\d+)/);
+        const ecode = ecodeMatch ? ecodeMatch[1] : null;
+        const slug = ecode
+          ? ecode.toLowerCase()
+          : activity
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .slice(0, 30);
+
+        // Infer label: customer short name + type
+        const custShort = account
+          .split("(")[0]
+          .replace(/,\s*$/, "")
+          .trim()
+          .slice(0, 25);
+        const actLower = activity.toLowerCase();
+        let atype = "Delivery";
+        let defaultTask = null;
+        if (
+          actLower.includes("support") ||
+          actLower.includes("optimization")
+        ) {
+          atype = "Support";
+          defaultTask = "Support & Optimization";
+        } else if (
+          actLower.includes("implementation") ||
+          actLower.includes("deployment")
+        ) {
+          atype = "Implementation";
+        } else if (actLower.includes("admin")) {
+          atype = "Admin";
+        } else if (actLower.includes("managed service")) {
+          atype = "MSP";
+          defaultTask = "Support & Optimization";
+        }
+
+        seen[activity] = {
+          id: slug,
+          label: custShort ? `${custShort} ${atype}` : activity.slice(0, 40),
+          code: activity,
+          customer: account,
+          default_task: defaultTask,
+          archived: false,
+        };
+      }
+
+      // Merge: only add activities whose code doesn't already exist
+      const existingCodes = new Set(list.map((a) => a.code));
+      const newOnes = Object.values(seen).filter(
+        (a) => !existingCodes.has(a.code)
+      );
+
+      if (newOnes.length === 0) {
+        setImportMsg(
+          `Parsed ${Object.keys(seen).length} activities — all already exist.`
+        );
+      } else {
+        setList((prev) => [...prev, ...newOnes]);
+        setImportMsg(
+          `Imported ${newOnes.length} new activities (${Object.keys(seen).length} total in CSV, ${Object.keys(seen).length - newOnes.length} already existed).`
+        );
+      }
+      setTimeout(() => setImportMsg(""), 8000);
+    };
+    reader.readAsText(file);
   }
 
   async function handleSave() {
@@ -1632,7 +1770,43 @@ function ActivityManager({ activities, onSave, onBack }) {
           <i className="ti ti-plus" style={{ fontSize: 13 }} />
           Add activity
         </button>
+        <label
+          style={{
+            ...pillBtn,
+            color: "var(--text-secondary)",
+            marginLeft: 0,
+          }}
+        >
+          <i className="ti ti-file-import" style={{ fontSize: 13 }} />
+          Import CSV
+          <input
+            type="file"
+            accept=".csv"
+            onChange={handleCsvImport}
+            style={{ display: "none" }}
+          />
+        </label>
       </div>
+
+      {/* Import message */}
+      {importMsg && (
+        <div
+          style={{
+            fontSize: 12,
+            color: "#1D9E75",
+            background: "#E1F5EE",
+            padding: "8px 12px",
+            borderRadius: 8,
+            marginBottom: 12,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <i className="ti ti-check" style={{ fontSize: 14 }} />
+          {importMsg}
+        </div>
+      )}
 
       {list
         .filter((a) => !a.archived)

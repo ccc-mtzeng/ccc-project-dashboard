@@ -1,50 +1,65 @@
 # Solution Tracker — Roadmap
 
-## Current: v0.1 — Static Prototype
+## Current: v0.2 — Live Data + Timesheet
+
+### Done
 - [x] Dashboard overview with stats
 - [x] Solution list with status + process area filters
 - [x] Timeline / Gantt view
-- [x] Solution detail with task breakdown
+- [x] Solution detail with task breakdown + inline editing
 - [x] NetSuite process area tag taxonomy
-- [ ] Wire up GitHub API for CRUD (read/write JSON to private data repo)
-- [ ] Add/edit solution form
-- [ ] Add/edit task form
-- [ ] GitHub OAuth or PAT-based auth
+- [x] GitHub API CRUD (read/write JSON to private data repo)
+- [x] PDF upload + AI parsing via GitHub Models
+- [x] GitHub OAuth + Cloudflare Worker auth
+- [x] Exclude/restore solutions
+- [x] Overage indicators (red progress bars, stat cards)
+- [x] design_url field for Word doc links
+- [x] Duplicate detection on upload
 
-## Backlog
+### Timesheet Module (in progress)
+- [x] Kantata activity lookup (CRUD in data repo)
+- [x] Weekly timesheet view with day-grouped entries
+- [x] Controlled burn blocks (date range, auto-distributed hours)
+- [x] Quick-add inline entry form with advanced fields (solution link, task category, engagement task, ticket)
+- [x] Submitted/pending toggle per entry
+- [x] Pending-only filter
+- [x] Copy-to-clipboard per entry and per day (tab-separated for Kantata grid paste)
+- [x] Kantata export preview table (burns decomposed into daily rows)
+- [x] Activity manager (add/edit/archive activities)
+- [x] Sticky save bar with dirty tracking
+- [x] Week navigation with ISO week keys
+- [ ] Solution-linked time entries → computed actual_hours rollup on solution detail
+- [ ] Time entries tab on solution detail view
+- [ ] Customer-level time rollup view
+
+### Backlog
+- [ ] Auto-status: derive solution top-level status from subtask statuses
+  - If any task is `in_progress` → solution becomes `in_progress`
+  - If all tasks are `complete` → solution becomes `deployed` (or `complete`)
+  - Starts as `draft` when no tasks have started
+  - User can still manually override top-level status at any time
+  - Client-side logic in SolutionDetail — compute suggested status on task change, apply if user hasn't overridden
+- [ ] Move `allowedUsers` check from frontend to Cloudflare Worker
+- [ ] Solution version history view (git commits per solution file)
+
+## Backlog — Future
 
 ### Outlook Calendar Integration
-**Priority:** High
+**Priority:** Medium (lower now that Timesheet module handles manual entry)
 **Effort:** Medium
 
-Integrate with Microsoft Graph API to auto-pull hours from Outlook calendar events.
+Import Outlook calendar events as draft time entries. Useful as a convenience layer for days where time is already tracked in calendar events.
 
 **Approach:**
-- Register an Azure AD app (free) for Graph API access
-- Add MSAL.js to the React app for OAuth login
-- Query `GET /me/calendarView` with date range filters
-- Aggregate event durations by solution tag
+- Microsoft Graph API via Azure AD app (MSAL.js)
+- Pull `GET /me/calendarView` for a date range
+- Present events in Timesheet view as "suggested" entries
+- User assigns each to an activity and confirms
+- No auto-mapping unless event subjects follow a convention
 
-**Tagging convention (proposed):**
-- Calendar events use a prefix: `[USAV]`, `[Relay]`, `[Zehnder]`
-- Or use Outlook categories mapped to solution IDs
-- Event subject optionally includes task type: `[USAV] Testing invoice request flow`
-
-**Hour types:**
-- **Testing / Solutioning:** Pulled from Outlook (variable, meeting-heavy)
-- **Development:** Manual entry or formula-based (controlled burn across date range)
-
-**Sync behavior:**
-- Dashboard has a "Sync hours" button that pulls recent calendar data
-- Computes actual_hours per solution per task category
-- Writes updated totals back to the GitHub data repo
-- Shows last-synced timestamp
-
-### Future Ideas
-- PDF generation of solution status reports
-- Customer-level rollup view (all solutions for a given client)
+### Additional Views
+- Customer-level rollup view (all solutions + time for a given client)
 - Team member workload view (hours across solutions per person)
 - Burndown charts per solution
-- Slack/Teams notifications for approaching go-live dates
+- PDF generation of solution status reports
 - CSV/Excel export of hours data
-- Solution design PDF upload + link storage
