@@ -348,7 +348,7 @@ export default function App() {
         <Timeline solutions={activeSolutions} onSelect={handleSelect} />
       )}
       {view === "detail" && selected && (
-        <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} />
+        <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} username={auth?.username} />
       )}
       {view === "upload" && (
         <SolutionUpload

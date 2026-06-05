@@ -1,7 +1,7 @@
 import StatCard from "./shared/StatCard";
 import ProgressBar from "./shared/ProgressBar";
 import { CATEGORY_COLORS } from "../data/constants";
-import { daysUntil, daysBetween, todayISO } from "../data/utils";
+import { daysUntil, daysBetween, todayISO, relativeTime } from "../data/utils";
 
 export default function Dashboard({ solutions, onSelect }) {
   const totalHoursEstimated = solutions.reduce((s, d) => s + d.total_hours, 0);
@@ -128,20 +128,21 @@ export default function Dashboard({ solutions, onSelect }) {
           {upcoming.map((s) => {
             const du = daysUntil(s.go_live_date);
             const isUrgent = daysBetween(todayISO(), s.go_live_date) <= 14;
+            const latestNote = (s.notes_log || [])[0];
             return (
               <div
                 key={s.id}
                 onClick={() => onSelect(s.id)}
                 style={{
                   display: "flex",
-                  alignItems: "center",
+                  alignItems: "flex-start",
                   gap: 10,
                   padding: "8px 0",
                   borderBottom: "0.5px solid var(--border-light)",
                   cursor: "pointer",
                 }}
               >
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
                       fontSize: 13,
@@ -154,12 +155,31 @@ export default function Dashboard({ solutions, onSelect }) {
                   <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
                     {s.customer}
                   </div>
+                  {latestNote && (
+                    <div
+                      style={{
+                        fontSize: 11, color: "var(--text-secondary)", marginTop: 3,
+                        display: "flex", alignItems: "center", gap: 4,
+                        overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
+                      }}
+                    >
+                      <i className="ti ti-note" style={{ fontSize: 12, flexShrink: 0, opacity: 0.6 }} />
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {latestNote.text}
+                      </span>
+                      <span style={{ flexShrink: 0, opacity: 0.6 }}>
+                        · {relativeTime(latestNote.created_at)}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <span
                   style={{
                     fontSize: 12,
                     fontWeight: 500,
                     color: isUrgent ? "#E24B4A" : "var(--text-secondary)",
+                    flexShrink: 0,
+                    marginTop: 1,
                   }}
                 >
                   {du}

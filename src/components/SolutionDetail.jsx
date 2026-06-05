@@ -4,7 +4,7 @@ import ProgressBar from "./shared/ProgressBar";
 import StatCard from "./shared/StatCard";
 import { STATUS_CONFIG, TASK_STATUS, CATEGORY_COLORS } from "../data/constants";
 import { getTagInfo } from "../data/taxonomy";
-import { daysUntil } from "../data/utils";
+import { daysUntil, newNoteId, relativeTime } from "../data/utils";
 
 const miniInputStyle = {
   fontFamily: "inherit",
@@ -44,13 +44,14 @@ const miniDateStyle = {
   cursor: "pointer",
 };
 
-export default function SolutionDetail({ solution, onBack, onSave }) {
+export default function SolutionDetail({ solution, onBack, onSave, username }) {
   // Editable draft — resets when solution prop changes
   const [draft, setDraft] = useState(structuredClone(solution));
   const [showExcludeForm, setShowExcludeForm] = useState(false);
   const [excludeNote, setExcludeNote] = useState(solution.excluded_note || "");
   const [saving, setSaving] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState(new Set());
+  const [noteText, setNoteText] = useState("");
 
   useEffect(() => {
     setDraft(structuredClone(solution));
@@ -92,6 +93,29 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
       next.has(idx) ? next.delete(idx) : next.add(idx);
       return next;
     });
+  }
+
+  function addNote() {
+    const text = noteText.trim();
+    if (!text) return;
+    const note = {
+      id: newNoteId(),
+      author: username || "unknown",
+      created_at: new Date().toISOString(),
+      text,
+    };
+    setDraft((d) => ({
+      ...d,
+      notes_log: [note, ...(d.notes_log || [])],
+    }));
+    setNoteText("");
+  }
+
+  function deleteNote(noteId) {
+    setDraft((d) => ({
+      ...d,
+      notes_log: (d.notes_log || []).filter((n) => n.id !== noteId),
+    }));
   }
 
   async function handleSaveChanges() {
@@ -603,6 +627,108 @@ export default function SolutionDetail({ solution, onBack, onSave }) {
             </div>
           );
         })}
+      </div>
+
+      {/* Activity / Notes log */}
+      <div
+        style={{
+          marginTop: 18,
+          border: "0.5px solid var(--border-light)",
+          borderRadius: "var(--radius-lg)",
+          padding: 16,
+        }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12, color: "var(--text-primary)" }}>
+          Activity
+        </div>
+
+        {/* New note input */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <input
+            value={noteText}
+            onChange={(e) => setNoteText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); } }}
+            placeholder="Add a status note…"
+            style={{
+              fontFamily: "inherit", fontSize: 13, padding: "8px 12px", borderRadius: 8,
+              border: "1px solid var(--border-light)", background: "var(--bg-primary)",
+              color: "var(--text-primary)", flex: 1, boxSizing: "border-box",
+            }}
+          />
+          <button
+            onClick={addNote}
+            disabled={!noteText.trim()}
+            style={{
+              fontFamily: "inherit", fontSize: 12, fontWeight: 500,
+              padding: "8px 14px", borderRadius: 8, border: "none",
+              background: noteText.trim() ? "var(--text-primary)" : "var(--bg-secondary)",
+              color: noteText.trim() ? "var(--bg-primary)" : "var(--text-secondary)",
+              cursor: noteText.trim() ? "pointer" : "default",
+              display: "flex", alignItems: "center", gap: 4,
+              transition: "all 0.15s",
+            }}
+          >
+            <i className="ti ti-send" style={{ fontSize: 13 }} />
+            Post
+          </button>
+        </div>
+
+        {/* Notes feed */}
+        {(draft.notes_log || []).length === 0 && (
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "8px 0" }}>
+            No activity yet. Add a note to track progress.
+          </div>
+        )}
+        {(draft.notes_log || []).map((note) => (
+          <div
+            key={note.id}
+            style={{
+              padding: "10px 0",
+              borderTop: "0.5px solid var(--border-light)",
+              display: "flex", gap: 10, alignItems: "flex-start",
+            }}
+          >
+            <div
+              style={{
+                width: 26, height: 26, borderRadius: 99,
+                background: "var(--bg-secondary)", border: "1px solid var(--border-light)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 11, fontWeight: 600, color: "var(--text-secondary)",
+                flexShrink: 0, textTransform: "uppercase",
+              }}
+            >
+              {(note.author || "?")[0]}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)" }}>
+                  {note.author}
+                </span>
+                <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                  {relativeTime(note.created_at)}
+                </span>
+              </div>
+              <div style={{ fontSize: 13, color: "var(--text-primary)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                {note.text}
+              </div>
+            </div>
+            {note.author === username && (
+              <button
+                onClick={() => deleteNote(note.id)}
+                title="Delete note"
+                style={{
+                  background: "none", border: "none", padding: 2, cursor: "pointer",
+                  color: "var(--text-secondary)", opacity: 0.4, fontSize: 13,
+                  flexShrink: 0,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; e.currentTarget.style.color = "#E24B4A"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.opacity = 0.4; e.currentTarget.style.color = "var(--text-secondary)"; }}
+              >
+                <i className="ti ti-trash" />
+              </button>
+            )}
+          </div>
+        ))}
       </div>
 
       {/* Save bar — appears when changes are made */}

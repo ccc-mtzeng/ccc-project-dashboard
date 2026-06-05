@@ -94,3 +94,28 @@ export function businessDaysBetween(start, end) {
 export function newEntryId() {
   return "te_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
 }
+
+/**
+ * Generate a unique note ID.
+ */
+export function newNoteId() {
+  return "n_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+}
+
+/**
+ * Human-readable relative time from an ISO datetime string.
+ */
+export function relativeTime(isoStr) {
+  const now = Date.now();
+  const then = new Date(isoStr).getTime();
+  const diffSec = Math.round((now - then) / 1000);
+  if (diffSec < 60) return "just now";
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.round(diffHr / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  const diffMo = Math.round(diffDay / 30);
+  return `${diffMo}mo ago`;
+}
