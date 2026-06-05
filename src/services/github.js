@@ -207,3 +207,31 @@ export async function deleteSolution(id) {
   const index = indexResult.data.filter((s) => s.id !== id);
   await writeFile("index.json", index, indexResult.sha, "Update index");
 }
+
+// ─── Timesheet aggregation helpers ───────────────────────────────────
+
+/**
+ * List all weekly timesheet file keys (e.g. ["2026-W14", "2026-W15", ...]).
+ */
+export async function listTimesheets() {
+  const res = await fetch(repoUrl("timesheets"), { headers: headers() });
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
+  const files = await res.json();
+  return files
+    .filter((f) => f.name.endsWith(".json"))
+    .map((f) => f.name.replace(".json", ""));
+}
+
+/**
+ * Load all timesheet files and return a flat array of all entries.
+ */
+export async function loadAllEntries() {
+  const weeks = await listTimesheets();
+  const results = await Promise.all(
+    weeks.map((wk) =>
+      loadTimesheet(wk).catch(() => ({ data: { entries: [] } }))
+    )
+  );
+  return results.flatMap((r) => r.data?.entries || []);
+}

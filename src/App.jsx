@@ -6,10 +6,11 @@ import SolutionDetail from "./components/SolutionDetail";
 import Timeline from "./components/Timeline";
 import SolutionUpload from "./components/SolutionUpload";
 import Timesheet from "./components/Timesheet";
+import Engagements from "./components/Engagements";
 import { NAV_ITEMS } from "./data/constants";
 import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
-import { configure, isConfigured, loadIndex, loadSolution, saveSolution, loadActivities, saveActivities, loadTimesheet, saveTimesheet } from "./services/github";
+import { configure, isConfigured, loadIndex, loadSolution, saveSolution, loadActivities, saveActivities, loadTimesheet, saveTimesheet, loadAllEntries } from "./services/github";
 import { isoWeekKey, todayISO } from "./data/utils";
 
 const pillStyle = {
@@ -39,6 +40,11 @@ export default function App() {
   const [timesheetLoading, setTimesheetLoading] = useState(false);
   const [activities, setActivities] = useState([]);
   const [activitiesSha, setActivitiesSha] = useState(null);
+
+  // All entries (loaded on demand for Engagements view)
+  const [allEntries, setAllEntries] = useState([]);
+  const [allEntriesLoading, setAllEntriesLoading] = useState(false);
+  const [allEntriesLoaded, setAllEntriesLoaded] = useState(false);
 
   // Handle OAuth callback on mount
   useEffect(() => {
@@ -172,6 +178,28 @@ export default function App() {
       console.warn("Failed to reload timesheet:", err);
     }
   }
+
+  // Fetch all entries across weeks (for Engagements view, lazy)
+  const fetchAllEntries = useCallback(async () => {
+    if (!isConfigured()) return;
+    setAllEntriesLoading(true);
+    try {
+      const entries = await loadAllEntries();
+      setAllEntries(entries);
+      setAllEntriesLoaded(true);
+    } catch (err) {
+      console.warn("Failed to load all entries:", err);
+    } finally {
+      setAllEntriesLoading(false);
+    }
+  }, []);
+
+  // Load entries on first visit to engagements
+  useEffect(() => {
+    if (view === "engagements" && auth && isConfigured() && !allEntriesLoaded && !allEntriesLoading) {
+      fetchAllEntries();
+    }
+  }, [view, auth, allEntriesLoaded, allEntriesLoading, fetchAllEntries]);
 
   function handleLogout() {
     clearAuth();
@@ -365,6 +393,15 @@ export default function App() {
       )}
       {!dataLoading && view === "timeline" && activeSolutions.length > 0 && (
         <Timeline solutions={activeSolutions} onSelect={handleSelect} />
+      )}
+      {view === "engagements" && (
+        <Engagements
+          activities={activities}
+          solutions={solutions}
+          allEntries={allEntries}
+          entriesLoading={allEntriesLoading}
+          onRefreshEntries={fetchAllEntries}
+        />
       )}
       {view === "detail" && selected && (
         <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} username={auth?.username} activities={activities} />
