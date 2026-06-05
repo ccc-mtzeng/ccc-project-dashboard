@@ -50,14 +50,12 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
   const [showExcludeForm, setShowExcludeForm] = useState(false);
   const [excludeNote, setExcludeNote] = useState(solution.excluded_note || "");
   const [saving, setSaving] = useState(false);
-  const [expandedTasks, setExpandedTasks] = useState(new Set());
   const [noteText, setNoteText] = useState("");
 
   useEffect(() => {
     setDraft(structuredClone(solution));
     setShowExcludeForm(false);
     setExcludeNote(solution.excluded_note || "");
-    setExpandedTasks(new Set());
   }, [solution.id]);
 
   // Dirty detection
@@ -85,14 +83,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
 
   function discardChanges() {
     setDraft(structuredClone(solution));
-  }
-
-  function toggleTask(idx) {
-    setExpandedTasks((prev) => {
-      const next = new Set(prev);
-      next.has(idx) ? next.delete(idx) : next.add(idx);
-      return next;
-    });
   }
 
   function addNote() {
@@ -429,14 +419,13 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "24px 1fr 80px 90px 60px 70px 100px",
+            gridTemplateColumns: "1fr 80px 90px 60px 70px 100px",
             padding: "8px 14px",
             background: "var(--bg-secondary)",
             fontSize: 11, fontWeight: 500, color: "var(--text-secondary)",
             textTransform: "uppercase", letterSpacing: "0.03em",
           }}
         >
-          <span />
           <span>Task</span>
           <span>Category</span>
           <span>Due</span>
@@ -450,108 +439,74 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
           const catColor = CATEGORY_COLORS[t.category] || "#888";
           const over = (Number(t.actual_hours) || 0) > t.estimated_hours && t.estimated_hours > 0;
           const variance = (Number(t.actual_hours) || 0) - t.estimated_hours;
-          const isExpanded = expandedTasks.has(i);
-          const hasNote = !!t.note;
           const isOverdue = t.due_date && new Date(t.due_date + "T00:00:00") < new Date() && t.status !== "complete";
           return (
-            <div key={i} style={{ borderTop: "0.5px solid var(--border-light)" }}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "24px 1fr 80px 90px 60px 70px 100px",
-                  padding: "8px 14px",
-                  alignItems: "center",
-                  fontSize: 13,
-                  background: over ? "rgba(226,75,74,0.04)" : "transparent",
-                }}
-              >
-                <button
-                  onClick={() => toggleTask(i)}
-                  title={isExpanded ? "Collapse note" : "Add/view note"}
+            <div
+              key={i}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 80px 90px 60px 70px 100px",
+                padding: "8px 14px",
+                borderTop: "0.5px solid var(--border-light)",
+                alignItems: "center",
+                fontSize: 13,
+                background: over ? "rgba(226,75,74,0.04)" : "transparent",
+              }}
+            >
+              <span style={{ color: "var(--text-primary)", fontWeight: 450, display: "flex", alignItems: "center", gap: 6 }}>
+                {t.name}
+                {over && (
+                  <span style={{ fontSize: 11, color: "#E24B4A", fontWeight: 500 }}>
+                    +{variance.toFixed(1)}h
+                  </span>
+                )}
+              </span>
+              <span style={{ fontSize: 11, color: catColor, textTransform: "capitalize" }}>
+                {t.category}
+              </span>
+              <span>
+                <input
+                  type="date"
+                  value={t.due_date || ""}
+                  onChange={(e) => updateTask(i, "due_date", e.target.value)}
                   style={{
-                    background: "none", border: "none", padding: 0, cursor: "pointer",
-                    color: hasNote ? "var(--text-primary)" : "var(--text-secondary)",
-                    opacity: hasNote ? 1 : 0.4,
-                    fontSize: 14, display: "flex", alignItems: "center",
-                    transition: "opacity 0.15s",
+                    ...miniDateStyle,
+                    fontSize: 11,
+                    padding: "2px 4px",
+                    width: 82,
+                    color: isOverdue ? "#E24B4A" : "var(--text-primary)",
+                    borderColor: isOverdue ? "rgba(226,75,74,0.5)" : "var(--border-light)",
                   }}
-                  onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.opacity = hasNote ? 1 : 0.4; }}
+                />
+              </span>
+              <span style={{ textAlign: "right", color: "var(--text-secondary)" }}>
+                {t.estimated_hours}h
+              </span>
+              <span style={{ textAlign: "right" }}>
+                <HourInput
+                  value={t.actual_hours}
+                  onChange={(val) => updateTask(i, "actual_hours", val)}
+                  style={{
+                    ...miniInputStyle,
+                    color: over ? "#E24B4A" : "var(--text-primary)",
+                    borderColor: over ? "rgba(226,75,74,0.4)" : "var(--border-light)",
+                  }}
+                />
+              </span>
+              <span style={{ textAlign: "right" }}>
+                <select
+                  value={t.status}
+                  onChange={(e) => updateTask(i, "status", e.target.value)}
+                  style={{
+                    ...miniSelectStyle,
+                    color: ts.color,
+                  }}
                 >
-                  <i className={isExpanded ? "ti ti-chevron-down" : hasNote ? "ti ti-note" : "ti ti-chevron-right"} />
-                </button>
-                <span style={{ color: "var(--text-primary)", fontWeight: 450, display: "flex", alignItems: "center", gap: 6 }}>
-                  {t.name}
-                  {over && (
-                    <span style={{ fontSize: 11, color: "#E24B4A", fontWeight: 500 }}>
-                      +{variance.toFixed(1)}h
-                    </span>
-                  )}
-                </span>
-                <span style={{ fontSize: 11, color: catColor, textTransform: "capitalize" }}>
-                  {t.category}
-                </span>
-                <span>
-                  <input
-                    type="date"
-                    value={t.due_date || ""}
-                    onChange={(e) => updateTask(i, "due_date", e.target.value)}
-                    style={{
-                      ...miniDateStyle,
-                      fontSize: 11,
-                      padding: "2px 4px",
-                      width: 82,
-                      color: isOverdue ? "#E24B4A" : "var(--text-primary)",
-                      borderColor: isOverdue ? "rgba(226,75,74,0.5)" : "var(--border-light)",
-                    }}
-                  />
-                </span>
-                <span style={{ textAlign: "right", color: "var(--text-secondary)" }}>
-                  {t.estimated_hours}h
-                </span>
-                <span style={{ textAlign: "right" }}>
-                  <HourInput
-                    value={t.actual_hours}
-                    onChange={(val) => updateTask(i, "actual_hours", val)}
-                    style={{
-                      ...miniInputStyle,
-                      color: over ? "#E24B4A" : "var(--text-primary)",
-                      borderColor: over ? "rgba(226,75,74,0.4)" : "var(--border-light)",
-                    }}
-                  />
-                </span>
-                <span style={{ textAlign: "right" }}>
-                  <select
-                    value={t.status}
-                    onChange={(e) => updateTask(i, "status", e.target.value)}
-                    style={{
-                      ...miniSelectStyle,
-                      color: ts.color,
-                    }}
-                  >
-                    {Object.entries(TASK_STATUS).map(([k, v]) => (
-                      <option key={k} value={k}>{v.label}</option>
-                    ))}
-                  </select>
-                </span>
-              </div>
-              {/* Expandable note */}
-              {isExpanded && (
-                <div style={{ padding: "0 14px 10px 38px" }}>
-                  <textarea
-                    value={t.note || ""}
-                    onChange={(e) => updateTask(i, "note", e.target.value)}
-                    placeholder="Status note… (e.g. waiting on client UAT, blocked by sandbox refresh)"
-                    style={{
-                      fontFamily: "inherit", fontSize: 12, color: "var(--text-secondary)",
-                      padding: "7px 10px", background: "var(--bg-secondary)",
-                      borderRadius: 6, lineHeight: 1.5, width: "100%",
-                      boxSizing: "border-box", border: "1px solid var(--border-light)",
-                      resize: "vertical", minHeight: 32,
-                    }}
-                  />
-                </div>
-              )}
+                  {Object.entries(TASK_STATUS).map(([k, v]) => (
+                    <option key={k} value={k}>{v.label}</option>
+                  ))}
+                </select>
+              </span>
             </div>
           );
         })}
@@ -560,13 +515,12 @@ export default function SolutionDetail({ solution, onBack, onSave, username }) {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "24px 1fr 80px 90px 60px 70px 100px",
+            gridTemplateColumns: "1fr 80px 90px 60px 70px 100px",
             padding: "10px 14px",
             borderTop: "1.5px solid var(--border-mid)",
             fontSize: 13, fontWeight: 500,
           }}
         >
-          <span />
           <span style={{ color: "var(--text-primary)", display: "flex", alignItems: "center", gap: 6 }}>
             Total
             {actual > draft.total_hours && draft.total_hours > 0 && (
