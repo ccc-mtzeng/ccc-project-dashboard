@@ -10,7 +10,7 @@ import Engagements from "./components/Engagements";
 import { NAV_ITEMS } from "./data/constants";
 import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
-import { configure, isConfigured, loadIndex, loadSolution, saveSolution, loadActivities, saveActivities, loadTimesheet, saveTimesheet, loadAllEntries } from "./services/github";
+import { configure, isConfigured, loadIndex, loadSolution, saveSolution, saveSolutionsBatch, loadActivities, saveActivities, loadTimesheet, saveTimesheet, loadAllEntries } from "./services/github";
 import { isoWeekKey, todayISO } from "./data/utils";
 
 const pillStyle = {
@@ -236,9 +236,9 @@ export default function App() {
     await fetchSolutions();
   }
 
-  // Batch save handler — saves all, reloads once
+  // Batch save handler — saves solution files in parallel, index.json once
   async function handleBatchSave(updatedSolutions) {
-    await Promise.all(updatedSolutions.map((s) => saveSolution(s)));
+    await saveSolutionsBatch(updatedSolutions);
     await fetchSolutions();
   }
 

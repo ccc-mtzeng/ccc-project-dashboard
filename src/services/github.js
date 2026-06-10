@@ -166,6 +166,49 @@ export async function saveSolution(solution) {
   return { sha: newSha };
 }
 
+/**
+ * Batch-save multiple solutions: writes each solution file in parallel,
+ * then reads index.json once, patches all entries, and writes it back once.
+ */
+export async function saveSolutionsBatch(solutions) {
+  // Save individual solution files in parallel (separate paths, no SHA conflict)
+  await Promise.all(
+    solutions.map(async (solution) => {
+      const existing = await readFile(`solutions/${solution.id}.json`);
+      await writeFile(
+        `solutions/${solution.id}.json`,
+        solution,
+        existing?.sha,
+        `Update solution: ${solution.title}`
+      );
+    })
+  );
+
+  // Read index once, patch all entries, write once
+  const indexResult = await loadIndex();
+  const index = indexResult.data;
+
+  for (const solution of solutions) {
+    const entry = {
+      id: solution.id,
+      title: solution.title,
+      customer: solution.customer,
+      status: solution.status,
+      go_live_date: solution.go_live_date,
+      total_hours: solution.total_hours,
+      tags: solution.tags,
+    };
+    const idx = index.findIndex((s) => s.id === solution.id);
+    if (idx >= 0) {
+      index[idx] = entry;
+    } else {
+      index.push(entry);
+    }
+  }
+
+  await writeFile("index.json", index, indexResult.sha, "Update index (batch)");
+}
+
 // ─── Timesheet helpers ─────────────────────────────────────────────
 
 /**
