@@ -63,3 +63,9 @@ button {
   background: var(--border-mid);
   border-radius: 3px;
 }
+
+/* Ensure text never overlaps the native dropdown arrow */
+select {
+  padding-right: 20px !important;
+  text-overflow: ellipsis;
+}
