@@ -132,11 +132,26 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
     setDraft((d) => ({ ...d, [field]: value }));
   }
 
+  function deriveSolutionStatus(tasks, currentStatus) {
+    if (!tasks.length || currentStatus === "on_hold") return currentStatus;
+    const allComplete = tasks.every((t) => t.status === "complete");
+    if (allComplete) return "deployed";
+    const allNotStarted = tasks.every((t) => t.status === "not_started");
+    if (allNotStarted) return "draft";
+    const incomplete = tasks.filter((t) => t.status !== "complete");
+    if (incomplete.every((t) => t.category === "testing")) return "testing";
+    return "in_progress";
+  }
+
   function updateTask(idx, field, value) {
     setDraft((d) => {
       const tasks = [...d.tasks];
       tasks[idx] = { ...tasks[idx], [field]: value };
-      return { ...d, tasks };
+      const updates = { ...d, tasks };
+      if (field === "status") {
+        updates.status = deriveSolutionStatus(tasks, d.status);
+      }
+      return updates;
     });
   }
 
