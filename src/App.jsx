@@ -236,6 +236,12 @@ export default function App() {
     await fetchSolutions();
   }
 
+  // Batch save handler — saves all, reloads once
+  async function handleBatchSave(updatedSolutions) {
+    await Promise.all(updatedSolutions.map((s) => saveSolution(s)));
+    await fetchSolutions();
+  }
+
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 20px 60px" }}>
       {/* Nav header */}
@@ -390,7 +396,7 @@ export default function App() {
         <SolutionList solutions={solutions} onSelect={handleSelect}
           filterTag={filterTag} setFilterTag={setFilterTag}
           filterStatus={filterStatus} setFilterStatus={setFilterStatus}
-          activities={activities} onSave={handleDetailSave} />
+          activities={activities} onBatchSave={handleBatchSave} />
       )}
       {!dataLoading && view === "timeline" && activeSolutions.length > 0 && (
         <Timeline solutions={activeSolutions} onSelect={handleSelect} />

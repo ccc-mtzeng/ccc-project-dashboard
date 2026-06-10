@@ -24,7 +24,7 @@ export default function SolutionList({
   filterStatus,
   setFilterStatus,
   activities = [],
-  onSave,
+  onBatchSave,
 }) {
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
@@ -56,13 +56,14 @@ export default function SolutionList({
   }
 
   async function saveChanges() {
-    if (!onSave) return;
+    if (!onBatchSave) return;
     setSaving(true);
     try {
-      for (const [solId, activityId] of Object.entries(engagementEdits)) {
+      const updates = Object.entries(engagementEdits).map(([solId, activityId]) => {
         const sol = solutions.find((s) => s.id === solId);
-        if (sol) await onSave({ ...sol, activity_id: activityId });
-      }
+        return { ...sol, activity_id: activityId };
+      }).filter(Boolean);
+      await onBatchSave(updates);
       setEngagementEdits({});
     } catch (err) {
       console.error("Failed to save engagements:", err);
