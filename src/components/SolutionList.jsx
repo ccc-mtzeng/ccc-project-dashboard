@@ -29,11 +29,51 @@ export default function SolutionList({
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
   const [filterCustomer, setFilterCustomer] = useState("");
+  const [engagementEdits, setEngagementEdits] = useState({});
+  const [saving, setSaving] = useState(false);
   const allTaxonomyKeys = Object.keys(TAG_TAXONOMY);
   const activeTagInfo = filterTag ? TAG_TAXONOMY[filterTag] : null;
   const excludedCount = solutions.filter((s) => s.excluded).length;
+  const isDirty = Object.keys(engagementEdits).length > 0;
 
   const customers = [...new Set(solutions.map((s) => s.customer).filter(Boolean))].sort();
+
+  function getEngagement(sol) {
+    if (sol.id in engagementEdits) return engagementEdits[sol.id];
+    return sol.activity_id || null;
+  }
+
+  function handleEngagementChange(sol, value) {
+    const newVal = value || null;
+    const original = sol.activity_id || null;
+    if (newVal === original) {
+      const next = { ...engagementEdits };
+      delete next[sol.id];
+      setEngagementEdits(next);
+    } else {
+      setEngagementEdits({ ...engagementEdits, [sol.id]: newVal });
+    }
+  }
+
+  async function saveChanges() {
+    if (!onSave) return;
+    setSaving(true);
+    try {
+      for (const [solId, activityId] of Object.entries(engagementEdits)) {
+        const sol = solutions.find((s) => s.id === solId);
+        if (sol) await onSave({ ...sol, activity_id: activityId });
+      }
+      setEngagementEdits({});
+    } catch (err) {
+      console.error("Failed to save engagements:", err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function discardChanges() {
+    setEngagementEdits({});
+  }
 
   const filtered = solutions.filter((s) => {
     if (!showExcluded && s.excluded) return false;
@@ -292,13 +332,14 @@ export default function SolutionList({
         {filtered.map((s) => {
           const actual = s.tasks.reduce((a, t) => a + t.actual_hours, 0);
           const sc = STATUS_CONFIG[s.status];
-          const linkedActivity = activities.find((a) => a.id === s.activity_id);
+          const engValue = getEngagement(s);
+          const isEdited = s.id in engagementEdits;
           return (
             <div
               key={s.id}
               onClick={() => onSelect(s.id)}
               style={{
-                border: "0.5px solid var(--border-light)",
+                border: isEdited ? "1px solid #BA751766" : "0.5px solid var(--border-light)",
                 borderRadius: "var(--radius-lg)",
                 padding: "14px 16px",
                 cursor: "pointer",
@@ -309,10 +350,10 @@ export default function SolutionList({
                 opacity: s.excluded ? 0.5 : 1,
               }}
               onMouseOver={(e) =>
-                (e.currentTarget.style.borderColor = "var(--border-mid)")
+                (e.currentTarget.style.borderColor = isEdited ? "#BA7517" : "var(--border-mid)")
               }
               onMouseOut={(e) =>
-                (e.currentTarget.style.borderColor = "var(--border-light)")
+                (e.currentTarget.style.borderColor = isEdited ? "#BA751766" : "var(--border-light)")
               }
             >
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -355,29 +396,29 @@ export default function SolutionList({
                     onClick={(e) => e.stopPropagation()}
                     style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
                   >
-                    <i className="ti ti-briefcase" style={{ fontSize: 12, color: "var(--text-tertiary)" }} />
+                    <i className="ti ti-briefcase" style={{ fontSize: 12, color: isEdited ? "#BA7517" : "var(--text-tertiary)" }} />
                     <select
-                      value={s.activity_id || ""}
-                      onChange={async (e) => {
+                      value={engValue || ""}
+                      onChange={(e) => {
                         e.stopPropagation();
-                        const updated = { ...s, activity_id: e.target.value || null };
-                        if (onSave) await onSave(updated);
+                        handleEngagementChange(s, e.target.value);
                       }}
                       style={{
                         fontFamily: "inherit",
                         fontSize: 11,
                         padding: "1px 4px",
                         borderRadius: 4,
-                        border: "1px solid transparent",
-                        background: "transparent",
-                        color: s.activity_id ? "var(--text-secondary)" : "var(--text-tertiary)",
+                        border: isEdited ? "1px solid #BA751766" : "1px solid transparent",
+                        background: isEdited ? "#BA75170A" : "transparent",
+                        color: isEdited ? "#BA7517" : engValue ? "var(--text-secondary)" : "var(--text-tertiary)",
                         cursor: "pointer",
-                        fontStyle: s.activity_id ? "normal" : "italic",
+                        fontStyle: engValue ? "normal" : "italic",
+                        fontWeight: isEdited ? 500 : 400,
                         maxWidth: 200,
-                        transition: "border-color 0.15s",
+                        transition: "all 0.15s",
                       }}
-                      onMouseOver={(e) => e.target.style.borderColor = "var(--border-mid)"}
-                      onMouseOut={(e) => e.target.style.borderColor = "transparent"}
+                      onMouseOver={(e) => e.target.style.borderColor = isEdited ? "#BA7517" : "var(--border-mid)"}
+                      onMouseOut={(e) => e.target.style.borderColor = isEdited ? "#BA751766" : "transparent"}
                     >
                       <option value="">No engagement</option>
                       {activities.filter((a) => !a.archived).map((a) => (
@@ -431,6 +472,57 @@ export default function SolutionList({
           </div>
         )}
       </div>
+
+      {/* Save bar */}
+      {isDirty && (
+        <div
+          style={{
+            position: "sticky",
+            bottom: 16,
+            marginTop: 20,
+            background: "var(--bg-primary)",
+            border: "1px solid var(--border-mid)",
+            borderRadius: 10,
+            padding: "10px 16px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
+          }}
+        >
+          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            <i className="ti ti-briefcase" style={{ fontSize: 14, marginRight: 6 }} />
+            {Object.keys(engagementEdits).length} engagement{Object.keys(engagementEdits).length !== 1 ? "s" : ""} changed
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={discardChanges}
+              style={{
+                fontFamily: "inherit", fontSize: 13, padding: "6px 12px",
+                borderRadius: 6, border: "1px solid var(--border-light)",
+                background: "transparent", color: "var(--text-secondary)",
+                cursor: "pointer",
+              }}
+            >
+              Discard
+            </button>
+            <button
+              onClick={saveChanges}
+              disabled={saving}
+              style={{
+                fontFamily: "inherit", fontSize: 13, fontWeight: 500,
+                padding: "6px 14px", borderRadius: 6, border: "none",
+                background: "var(--text-primary)", color: "var(--bg-primary)",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+                opacity: saving ? 0.5 : 1,
+              }}
+            >
+              <i className="ti ti-device-floppy" style={{ fontSize: 14 }} />
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
