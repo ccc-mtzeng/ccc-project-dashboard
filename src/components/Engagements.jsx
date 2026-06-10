@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import StatCard from "./shared/StatCard";
 import ProgressBar from "./shared/ProgressBar";
+import SplitEntryModal from "./SplitEntryModal";
 import { CATEGORY_COLORS } from "../data/constants";
 import { formatDate, isoWeekKey } from "../data/utils";
 import {
@@ -70,13 +71,18 @@ function EngagementList({ activities, solutions, allEntries, loading, onSelect }
   const [search, setSearch] = useState("");
 
   const enriched = useMemo(() => {
+    // Build set of split parent IDs globally
+    const splitIds = new Set();
+    for (const e of allEntries) {
+      if (e.parent_id) splitIds.add(e.parent_id);
+    }
     return activities.map((act) => {
-      const entries = allEntries.filter((e) => e.activity_id === act.id);
-      const totalHours = Math.round(entries.reduce((s, e) => s + e.hours, 0) * 10) / 10;
+      const visible = allEntries.filter((e) => e.activity_id === act.id && !splitIds.has(e.id));
+      const totalHours = Math.round(visible.reduce((s, e) => s + e.hours, 0) * 10) / 10;
       const linkedSolutions = solutions.filter((s) => s.activity_id === act.id && !s.excluded);
-      const taggedCount = entries.filter((e) => e.solution_id).length;
-      const untaggedCount = entries.length - taggedCount;
-      return { ...act, entries, totalHours, linkedSolutions, taggedCount, untaggedCount };
+      const taggedCount = visible.filter((e) => e.solution_id).length;
+      const untaggedCount = visible.length - taggedCount;
+      return { ...act, entries: visible, totalHours, linkedSolutions, taggedCount, untaggedCount };
     });
   }, [activities, allEntries, solutions]);
 
@@ -244,7 +250,8 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     [solutions, activity.id]
   );
 
-  const entries = useMemo(
+  // All entries for this activity (including parents and children)
+  const rawEntries = useMemo(
     () =>
       allEntries
         .filter((e) => e.activity_id === activity.id)
@@ -252,9 +259,25 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     [allEntries, activity.id]
   );
 
+  // IDs of entries that have been split (have children)
+  const splitParentIds = useMemo(() => {
+    const ids = new Set();
+    for (const e of allEntries) {
+      if (e.parent_id) ids.add(e.parent_id);
+    }
+    return ids;
+  }, [allEntries]);
+
+  // Visible entries: hide split parents, show their children + all unsplit entries
+  const entries = useMemo(
+    () => rawEntries.filter((e) => !splitParentIds.has(e.id)),
+    [rawEntries, splitParentIds]
+  );
+
   // Local editable copy for tagging
   const [tagEdits, setTagEdits] = useState({}); // { entryId: solutionId | null }
   const [saving, setSaving] = useState(false);
+  const [splitEntry, setSplitEntry] = useState(null); // entry being split
 
   const isDirty = Object.keys(tagEdits).length > 0;
 
@@ -312,6 +335,58 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     } catch (err) {
       console.error("Failed to save tags:", err);
       alert("Failed to save: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── Split handlers ──
+
+  function getChildrenOf(parentId) {
+    return allEntries.filter((e) => e.parent_id === parentId);
+  }
+
+  async function handleSplitSave(children) {
+    setSaving(true);
+    try {
+      const parentEntry = rawEntries.find((e) => e.id === splitEntry.id) || splitEntry;
+      const wk = isoWeekKey(parentEntry.date);
+      const { data, sha } = await loadTimesheet(wk);
+      const existing = data?.entries || [];
+
+      // Remove old children of this parent
+      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
+      // Add new children
+      const updated = [...cleaned, ...children];
+
+      await saveTimesheet(wk, { week: wk, entries: updated }, sha);
+      setSplitEntry(null);
+      if (onRefreshEntries) onRefreshEntries();
+    } catch (err) {
+      console.error("Failed to save split:", err);
+      alert("Failed to save split: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUnsplit() {
+    setSaving(true);
+    try {
+      const parentEntry = rawEntries.find((e) => e.id === splitEntry.id) || splitEntry;
+      const wk = isoWeekKey(parentEntry.date);
+      const { data, sha } = await loadTimesheet(wk);
+      const existing = data?.entries || [];
+
+      // Remove all children of this parent
+      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
+
+      await saveTimesheet(wk, { week: wk, entries: cleaned }, sha);
+      setSplitEntry(null);
+      if (onRefreshEntries) onRefreshEntries();
+    } catch (err) {
+      console.error("Failed to unsplit:", err);
+      alert("Failed to unsplit: " + err.message);
     } finally {
       setSaving(false);
     }
@@ -423,7 +498,7 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
       }}>
         <div style={{
           display: "grid",
-          gridTemplateColumns: linkedSolutions.length > 0 ? "90px 1fr 180px 60px" : "90px 1fr 60px",
+          gridTemplateColumns: linkedSolutions.length > 0 ? "90px 1fr 180px 60px 32px" : "90px 1fr 60px 32px",
           padding: "8px 14px",
           background: "var(--bg-secondary)",
           fontSize: 11, fontWeight: 500, color: "var(--text-secondary)",
@@ -433,23 +508,28 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
           <span>Notes</span>
           {linkedSolutions.length > 0 && <span>Solution</span>}
           <span style={{ textAlign: "right" }}>Hours</span>
+          <span />
         </div>
 
         {groupedByDate.map(([date, dayEntries]) => (
           dayEntries.map((entry, idx) => {
             const tagValue = getTag(entry);
             const isEdited = entry.id in tagEdits;
+            const isChild = !!entry.parent_id;
+            const isSplitParent = splitParentIds.has(entry.id);
+            // For child entries, find the parent to enable re-opening split modal
+            const parentEntry = isChild ? rawEntries.find((e) => e.id === entry.parent_id) : null;
             return (
               <div
                 key={entry.id}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: linkedSolutions.length > 0 ? "90px 1fr 180px 60px" : "90px 1fr 60px",
+                  gridTemplateColumns: linkedSolutions.length > 0 ? "90px 1fr 180px 60px 32px" : "90px 1fr 60px 32px",
                   padding: "8px 14px",
                   borderTop: "0.5px solid var(--border-light)",
                   alignItems: "center",
                   fontSize: 13,
-                  background: isEdited ? "rgba(24,95,165,0.03)" : "transparent",
+                  background: isEdited ? "rgba(24,95,165,0.03)" : isChild ? "rgba(0,0,0,0.015)" : "transparent",
                 }}
               >
                 <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
@@ -461,7 +541,16 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
                   paddingRight: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
                 }}>
+                  {isChild && (
+                    <i
+                      className="ti ti-corner-down-right"
+                      style={{ fontSize: 12, color: "var(--text-tertiary)", flexShrink: 0 }}
+                    />
+                  )}
                   {entry.notes || (
                     <span style={{ color: "var(--text-tertiary)", fontStyle: "italic", fontSize: 12 }}>
                       {entry.engagement_task || "—"}
@@ -496,6 +585,37 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
                 )}
                 <span style={{ textAlign: "right", fontWeight: 500, color: "var(--text-primary)" }}>
                   {entry.hours}h
+                </span>
+                <span style={{ textAlign: "center" }}>
+                  {isChild ? (
+                    <button
+                      onClick={() => parentEntry && setSplitEntry(parentEntry)}
+                      title="Edit split"
+                      style={{
+                        background: "none", border: "none", cursor: "pointer",
+                        color: "var(--text-tertiary)", fontSize: 13, padding: 2,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-primary)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-tertiary)"; }}
+                    >
+                      <i className="ti ti-edit" />
+                    </button>
+                  ) : !entry.parent_id && (
+                    <button
+                      onClick={() => setSplitEntry(entry)}
+                      title="Split entry"
+                      style={{
+                        background: "none", border: "none", cursor: "pointer",
+                        color: "var(--text-tertiary)", fontSize: 13, padding: 2,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-primary)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-tertiary)"; }}
+                    >
+                      <i className="ti ti-scissors" />
+                    </button>
+                  )}
                 </span>
               </div>
             );
@@ -558,6 +678,18 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
             </button>
           </div>
         </div>
+      )}
+
+      {/* Split modal */}
+      {splitEntry && (
+        <SplitEntryModal
+          entry={splitEntry}
+          existingChildren={getChildrenOf(splitEntry.id)}
+          solutions={linkedSolutions}
+          onSave={handleSplitSave}
+          onUnsplit={getChildrenOf(splitEntry.id).length > 0 ? handleUnsplit : null}
+          onClose={() => setSplitEntry(null)}
+        />
       )}
     </div>
   );

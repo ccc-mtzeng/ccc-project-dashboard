@@ -196,7 +196,7 @@ export default function App() {
 
   // Load entries on first visit to engagements
   useEffect(() => {
-    if (view === "engagements" && auth && isConfigured() && !allEntriesLoaded && !allEntriesLoading) {
+    if ((view === "engagements" || view === "detail" || view === "timesheet") && auth && isConfigured() && !allEntriesLoaded && !allEntriesLoading) {
       fetchAllEntries();
     }
   }, [view, auth, allEntriesLoaded, allEntriesLoading, fetchAllEntries]);
@@ -237,7 +237,7 @@ export default function App() {
   }
 
   return (
-    <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 20px 60px" }}>
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 20px 60px" }}>
       {/* Nav header */}
       <div
         style={{
@@ -404,7 +404,7 @@ export default function App() {
         />
       )}
       {view === "detail" && selected && (
-        <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} username={auth?.username} activities={activities} />
+        <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} username={auth?.username} activities={activities} allEntries={allEntries} entriesLoading={allEntriesLoading} />
       )}
       {view === "upload" && (
         <SolutionUpload
@@ -416,14 +416,11 @@ export default function App() {
       {view === "timesheet" && (
         <Timesheet
           activities={activities}
-          timesheet={timesheet}
-          timesheetSha={timesheetSha}
           solutions={solutions}
-          onSave={handleTimesheetSave}
+          allEntries={allEntries}
+          entriesLoading={allEntriesLoading}
+          onRefreshEntries={fetchAllEntries}
           onSaveActivities={handleActivitiesSave}
-          onWeekChange={setCurrentWeek}
-          currentWeek={currentWeek}
-          loading={timesheetLoading}
           onRefresh={handleRefresh}
         />
       )}

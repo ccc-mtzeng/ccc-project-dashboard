@@ -25,6 +25,6 @@ export const NAV_ITEMS = [
   { id: "solutions", icon: "ti-folder", label: "Solutions" },
   { id: "engagements", icon: "ti-briefcase", label: "Engagements" },
   { id: "timeline", icon: "ti-calendar", label: "Timeline" },
-  { id: "timesheet", icon: "ti-clock", label: "Timesheet" },
+  { id: "timesheet", icon: "ti-clock", label: "Time Entries" },
   { id: "upload", icon: "ti-file-upload", label: "Import" },
 ];

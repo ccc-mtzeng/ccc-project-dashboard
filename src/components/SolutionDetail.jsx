@@ -6,8 +6,6 @@ import { STATUS_CONFIG, TASK_STATUS, CATEGORY_COLORS } from "../data/constants";
 import { getTagInfo } from "../data/taxonomy";
 import { daysUntil, newNoteId, relativeTime } from "../data/utils";
 
-const LAYOUT_KEY = "ccc-solution-layout";
-
 const miniInputStyle = {
   fontFamily: "inherit",
   fontSize: 13,
@@ -60,16 +58,12 @@ const sectionBoxStyle = {
   padding: 16,
 };
 
-export default function SolutionDetail({ solution, onBack, onSave, username, activities = [] }) {
+export default function SolutionDetail({ solution, onBack, onSave, username, activities = [], allEntries = [], entriesLoading = false }) {
   const [draft, setDraft] = useState(structuredClone(solution));
   const [showExcludeForm, setShowExcludeForm] = useState(false);
   const [excludeNote, setExcludeNote] = useState(solution.excluded_note || "");
   const [saving, setSaving] = useState(false);
   const [noteText, setNoteText] = useState("");
-  const [layoutMode, setLayoutMode] = useState(() => {
-    try { return localStorage.getItem(LAYOUT_KEY) || "tabs"; } catch { return "tabs"; }
-  });
-  const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState("tasks");
 
   useEffect(() => {
@@ -77,10 +71,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
     setShowExcludeForm(false);
     setExcludeNote(solution.excluded_note || "");
   }, [solution.id]);
-
-  useEffect(() => {
-    try { localStorage.setItem(LAYOUT_KEY, layoutMode); } catch {}
-  }, [layoutMode]);
 
   const isDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(solution),
@@ -102,6 +92,39 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
   }, [draft.tasks]);
 
   const completedCount = draft.tasks.filter((t) => t.status === "complete").length;
+
+  // IDs of entries that have been split (have children)
+  const splitParentIds = useMemo(() => {
+    const ids = new Set();
+    for (const e of allEntries) {
+      if (e.parent_id) ids.add(e.parent_id);
+    }
+    return ids;
+  }, [allEntries]);
+
+  // Entries tagged to this solution (excluding split parents)
+  const solutionEntries = useMemo(() => {
+    if (!allEntries.length) return [];
+    return allEntries
+      .filter((e) => e.solution_id === draft.id && !splitParentIds.has(e.id))
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [allEntries, draft.id, splitParentIds]);
+
+  const totalActualHours = useMemo(() => {
+    return Math.round(solutionEntries.reduce((s, e) => s + (e.hours || 0), 0) * 10) / 10;
+  }, [solutionEntries]);
+
+  // Hours by task_category for breakdown
+  const hoursByCategory = useMemo(() => {
+    const map = {};
+    solutionEntries.forEach((e) => {
+      const cat = e.task_category || "untagged";
+      map[cat] = (map[cat] || 0) + (e.hours || 0);
+    });
+    return Object.entries(map)
+      .map(([cat, hrs]) => ({ category: cat, hours: Math.round(hrs * 10) / 10 }))
+      .sort((a, b) => b.hours - a.hours);
+  }, [solutionEntries]);
 
   // ── Edit helpers ──
 
@@ -190,6 +213,14 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
           sub={completedCount === draft.tasks.length && draft.tasks.length > 0 ? "All complete" : undefined}
         />
         <StatCard icon="clock" label="Estimated" value={`${draft.total_hours}h`} sub="from solution design" />
+        {totalActualHours > 0 && (
+          <StatCard
+            icon="clock-check"
+            label="Actual"
+            value={`${totalActualHours}h`}
+            sub={draft.total_hours > 0 ? `${Math.round((totalActualHours / draft.total_hours) * 100)}% of estimate` : undefined}
+          />
+        )}
       </div>
     );
   }
@@ -559,11 +590,140 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
     );
   }
 
+  function renderTimeEntries() {
+    if (entriesLoading) {
+      return (
+        <div style={{ ...sectionBoxStyle, textAlign: "center", padding: "24px 16px" }}>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Loading time entries…</div>
+        </div>
+      );
+    }
+
+    return (
+      <div style={sectionBoxStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>
+            Time entries
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>
+            {totalActualHours}h actual
+            {draft.total_hours > 0 && (
+              <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400, marginLeft: 6 }}>
+                / {draft.total_hours}h est
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Category breakdown */}
+        {hoursByCategory.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            {hoursByCategory.map(({ category, hours }) => {
+              const catColor = CATEGORY_COLORS[category] || "#888";
+              const pct = draft.total_hours > 0 ? Math.round((hours / draft.total_hours) * 100) : 0;
+              return (
+                <div key={category} style={{ marginBottom: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 2 }}>
+                    <span style={{ color: catColor, textTransform: "capitalize" }}>{category}</span>
+                    <span style={{ color: "var(--text-secondary)" }}>
+                      {hours}h
+                      {draft.total_hours > 0 && <span style={{ marginLeft: 4, fontSize: 11 }}>({pct}%)</span>}
+                    </span>
+                  </div>
+                  <ProgressBar
+                    value={hours}
+                    max={draft.total_hours > 0 ? draft.total_hours : totalActualHours}
+                    color={catColor}
+                    height={4}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Entry table */}
+        {solutionEntries.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "8px 0" }}>
+            No time entries tagged to this solution yet. Tag entries from the Engagements view.
+          </div>
+        ) : (
+          <div style={{ border: "0.5px solid var(--border-light)", borderRadius: "var(--radius-md)", overflow: "hidden" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "90px 55px 1fr 120px",
+                padding: "6px 12px",
+                background: "var(--bg-secondary)",
+                fontSize: 11, fontWeight: 500, color: "var(--text-secondary)",
+                textTransform: "uppercase", letterSpacing: "0.03em",
+              }}
+            >
+              <span>Date</span>
+              <span style={{ textAlign: "right" }}>Hours</span>
+              <span style={{ paddingLeft: 12 }}>Notes</span>
+              <span>Category</span>
+            </div>
+            {solutionEntries.slice(0, 50).map((entry) => {
+              const catColor = CATEGORY_COLORS[entry.task_category] || "var(--text-secondary)";
+              return (
+                <div
+                  key={entry.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "90px 55px 1fr 120px",
+                    padding: "6px 12px",
+                    borderTop: "0.5px solid var(--border-light)",
+                    alignItems: "center",
+                    fontSize: 12,
+                  }}
+                >
+                  <span style={{ color: "var(--text-secondary)" }}>{entry.date}</span>
+                  <span style={{ textAlign: "right", fontWeight: 500, color: "var(--text-primary)" }}>{entry.hours}</span>
+                  <span style={{
+                    paddingLeft: 12, color: "var(--text-secondary)",
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  }}>
+                    {entry.notes || "—"}
+                  </span>
+                  <span style={{ fontSize: 11, color: catColor, textTransform: "capitalize" }}>
+                    {entry.task_category || "—"}
+                  </span>
+                </div>
+              );
+            })}
+            {solutionEntries.length > 50 && (
+              <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-secondary)", borderTop: "0.5px solid var(--border-light)" }}>
+                Showing 50 of {solutionEntries.length} entries
+              </div>
+            )}
+            {/* Total row */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "90px 55px 1fr 120px",
+                padding: "8px 12px",
+                borderTop: "1.5px solid var(--border-mid)",
+                fontSize: 12, fontWeight: 500,
+              }}
+            >
+              <span style={{ color: "var(--text-primary)" }}>Total</span>
+              <span style={{ textAlign: "right", color: "var(--text-primary)" }}>{totalActualHours}h</span>
+              <span />
+              <span />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // ── Layout renderers ──
 
   function renderTabbedLayout() {
     const tabs = [
       { key: "tasks", label: "Tasks", icon: "ti-list-check" },
+      { key: "time", label: "Time", icon: "ti-clock" },
       { key: "progress", label: "Progress", icon: "ti-chart-bar" },
       { key: "activity", label: "Activity", icon: "ti-message-circle" },
       { key: "details", label: "Details", icon: "ti-info-circle" },
@@ -619,6 +779,15 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
                     {noteCount}
                   </span>
                 )}
+                {tab.key === "time" && totalActualHours > 0 && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 500, background: "var(--bg-secondary)",
+                    color: "var(--text-secondary)", borderRadius: 99,
+                    padding: "1px 6px", marginLeft: 2,
+                  }}>
+                    {totalActualHours}h
+                  </span>
+                )}
               </button>
             );
           })}
@@ -626,162 +795,11 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
 
         {/* Tab content */}
         {activeTab === "tasks" && renderTaskTable()}
+        {activeTab === "time" && renderTimeEntries()}
         {activeTab === "progress" && renderProgressBars()}
         {activeTab === "activity" && renderActivityLog()}
         {activeTab === "details" && renderDetails()}
       </>
-    );
-  }
-
-  function renderTwoColumnLayout() {
-    return (
-      <div style={{ display: "flex", gap: 20 }}>
-        {/* Left column: tasks + activity */}
-        <div style={{ flex: 1.4, minWidth: 0 }}>
-          {renderTaskTable()}
-          <div style={{ marginTop: 18 }}>
-            {renderActivityLog()}
-          </div>
-        </div>
-
-        {/* Right column: stats + progress + details */}
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
-          {renderStats()}
-          {renderProgressBars()}
-          <div style={sectionBoxStyle}>
-            <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10, color: "var(--text-primary)" }}>
-              Details
-            </div>
-            {renderDetails()}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Settings modal ──
-
-  function renderSettingsModal() {
-    if (!showSettings) return null;
-
-    const layouts = [
-      {
-        key: "tabs",
-        label: "Tabbed",
-        desc: "Stats pinned, content in tabs",
-        icon: "ti-layout-navbar",
-      },
-      {
-        key: "columns",
-        label: "Two-column",
-        desc: "Tasks left, context right",
-        icon: "ti-layout-columns",
-      },
-    ];
-
-    return (
-      <div
-        style={{
-          position: "fixed", inset: 0, zIndex: 1000,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}
-      >
-        {/* Backdrop */}
-        <div
-          onClick={() => setShowSettings(false)}
-          style={{
-            position: "absolute", inset: 0,
-            background: "rgba(0,0,0,0.3)", backdropFilter: "blur(2px)",
-          }}
-        />
-        {/* Modal */}
-        <div
-          style={{
-            position: "relative",
-            background: "var(--bg-primary)",
-            border: "1px solid var(--border-light)",
-            borderRadius: "var(--radius-lg)",
-            padding: "20px 24px",
-            width: 380,
-            maxWidth: "90vw",
-            boxShadow: "0 16px 48px rgba(0,0,0,0.15)",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <span style={{ fontSize: 15, fontWeight: 500, color: "var(--text-primary)" }}>
-              Layout settings
-            </span>
-            <button
-              onClick={() => setShowSettings(false)}
-              style={{
-                background: "none", border: "none", cursor: "pointer",
-                color: "var(--text-secondary)", fontSize: 18, padding: 2,
-                display: "flex", alignItems: "center",
-              }}
-            >
-              <i className="ti ti-x" />
-            </button>
-          </div>
-
-          <div style={{ display: "flex", gap: 10 }}>
-            {layouts.map((l) => {
-              const active = layoutMode === l.key;
-              return (
-                <button
-                  key={l.key}
-                  onClick={() => {
-                    setLayoutMode(l.key);
-                    setShowSettings(false);
-                  }}
-                  style={{
-                    flex: 1,
-                    fontFamily: "inherit",
-                    padding: "14px 12px",
-                    borderRadius: "var(--radius-md)",
-                    border: active
-                      ? "2px solid var(--text-primary)"
-                      : "1px solid var(--border-light)",
-                    background: active ? "var(--bg-secondary)" : "var(--bg-primary)",
-                    cursor: "pointer",
-                    textAlign: "center",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  <i
-                    className={`ti ${l.icon}`}
-                    style={{
-                      fontSize: 24,
-                      color: active ? "var(--text-primary)" : "var(--text-secondary)",
-                      display: "block",
-                      marginBottom: 8,
-                    }}
-                  />
-                  <div style={{
-                    fontSize: 13, fontWeight: 500,
-                    color: active ? "var(--text-primary)" : "var(--text-secondary)",
-                    marginBottom: 2,
-                  }}>
-                    {l.label}
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                    {l.desc}
-                  </div>
-                  {active && (
-                    <div style={{
-                      marginTop: 8, fontSize: 11, fontWeight: 500,
-                      color: "var(--text-primary)",
-                      display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                    }}>
-                      <i className="ti ti-check" style={{ fontSize: 13 }} />
-                      Active
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
     );
   }
 
@@ -828,7 +846,7 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
         </div>
       )}
 
-      {/* Title + status + settings gear */}
+      {/* Title + status */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
         <h2
           style={{
@@ -860,21 +878,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
             v{draft.version}
           </span>
         )}
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={() => setShowSettings(true)}
-          title="Layout settings"
-          style={{
-            background: "none", border: "1px solid var(--border-light)",
-            borderRadius: 6, padding: "4px 6px", cursor: "pointer",
-            color: "var(--text-secondary)", display: "flex", alignItems: "center",
-            fontSize: 15, transition: "all 0.15s",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--border-mid)"; e.currentTarget.style.color = "var(--text-primary)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border-light)"; e.currentTarget.style.color = "var(--text-secondary)"; }}
-        >
-          <i className="ti ti-settings" />
-        </button>
       </div>
 
       <div
@@ -948,76 +951,73 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
         })}
       </div>
 
-      {/* Dates + engagement shown in header for tabbed layout only */}
-      {layoutMode === "tabs" && (
-        <div style={{ marginBottom: 18 }}>
-          <div
-            style={{
-              display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap",
-              alignItems: "center",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={labelStyle}>Created</span>
-              <input
-                type="date"
-                value={draft.date_created || ""}
-                onChange={(e) => updateDraft("date_created", e.target.value)}
-                style={miniDateStyle}
-              />
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={labelStyle}>Go-live</span>
-              <input
-                type="date"
-                value={draft.go_live_date || ""}
-                onChange={(e) => updateDraft("go_live_date", e.target.value)}
-                style={{
-                  ...miniDateStyle,
-                  borderColor: draft.go_live_date && daysUntil(draft.go_live_date).includes("ago")
-                    ? "rgba(226,75,74,0.5)" : "var(--border-light)",
-                }}
-              />
-              {draft.go_live_date && (
-                <span style={{
-                  fontSize: 11, fontWeight: 500,
-                  color: daysUntil(draft.go_live_date).includes("ago") ? "#E24B4A" : "var(--text-secondary)",
-                }}>
-                  {daysUntil(draft.go_live_date)}
-                </span>
-              )}
-            </div>
+      {/* Dates + engagement */}
+      <div style={{ marginBottom: 18 }}>
+        <div
+          style={{
+            display: "flex", gap: 16, marginBottom: 12, flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={labelStyle}>Created</span>
+            <input
+              type="date"
+              value={draft.date_created || ""}
+              onChange={(e) => updateDraft("date_created", e.target.value)}
+              style={miniDateStyle}
+            />
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={labelStyle}>Engagement</span>
-            <select
-              value={draft.activity_id || ""}
-              onChange={(e) => updateDraft("activity_id", e.target.value || null)}
+            <span style={labelStyle}>Go-live</span>
+            <input
+              type="date"
+              value={draft.go_live_date || ""}
+              onChange={(e) => updateDraft("go_live_date", e.target.value)}
               style={{
-                ...miniSelectStyle,
-                fontSize: 12,
-                padding: "4px 8px",
-                maxWidth: 360,
+                ...miniDateStyle,
+                borderColor: draft.go_live_date && daysUntil(draft.go_live_date).includes("ago")
+                  ? "rgba(226,75,74,0.5)" : "var(--border-light)",
               }}
-            >
-              <option value="">— None —</option>
-              {activities.filter((a) => !a.archived).map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.customer} — {a.label || a.code}
-                </option>
-              ))}
-            </select>
-            {linkedActivity && (
-              <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                {linkedActivity.id.toUpperCase()}
+            />
+            {draft.go_live_date && (
+              <span style={{
+                fontSize: 11, fontWeight: 500,
+                color: daysUntil(draft.go_live_date).includes("ago") ? "#E24B4A" : "var(--text-secondary)",
+              }}>
+                {daysUntil(draft.go_live_date)}
               </span>
             )}
           </div>
         </div>
-      )}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={labelStyle}>Engagement</span>
+          <select
+            value={draft.activity_id || ""}
+            onChange={(e) => updateDraft("activity_id", e.target.value || null)}
+            style={{
+              ...miniSelectStyle,
+              fontSize: 12,
+              padding: "4px 8px",
+              maxWidth: 360,
+            }}
+          >
+            <option value="">— None —</option>
+            {activities.filter((a) => !a.archived).map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.customer} — {a.label || a.code}
+              </option>
+            ))}
+          </select>
+          {linkedActivity && (
+            <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+              {linkedActivity.id.toUpperCase()}
+            </span>
+          )}
+        </div>
+      </div>
 
-      {/* Layout body */}
-      {layoutMode === "tabs" ? renderTabbedLayout() : renderTwoColumnLayout()}
+      {renderTabbedLayout()}
 
       {/* Save bar */}
       {isDirty && (
@@ -1069,9 +1069,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
           </div>
         </div>
       )}
-
-      {/* Settings modal */}
-      {renderSettingsModal()}
     </div>
   );
 }

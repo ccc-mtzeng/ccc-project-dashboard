@@ -1,34 +1,21 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import StatCard from "./shared/StatCard";
+import ProgressBar from "./shared/ProgressBar";
+import SplitEntryModal from "./SplitEntryModal";
 import TimeEntryImport from "./TimeEntryImport";
 import { CATEGORY_COLORS } from "../data/constants";
+import { formatDate, isoWeekKey } from "../data/utils";
 import {
-  todayISO,
-  isoWeekKey,
-  weekDates,
-  offsetWeek,
-  businessDaysBetween,
-  newEntryId,
-  formatDate,
-} from "../data/utils";
+  loadTimesheet,
+  saveTimesheet,
+  saveActivities,
+} from "../services/github";
 
-// ── Styles ──────────────────────────────────────────────────────────
-
-const cardBorder = {
-  border: "0.5px solid var(--border-light)",
-  borderRadius: "var(--radius-lg)",
-};
-
-const sectionTitle = {
-  fontSize: 14,
-  fontWeight: 500,
-  color: "var(--text-primary)",
-  marginBottom: 12,
-};
+// ── Shared styles ─────────────────────────────────────────────────
 
 const pillBtn = {
   fontSize: 12,
-  padding: "4px 10px",
+  padding: "5px 12px",
   borderRadius: 99,
   cursor: "pointer",
   border: "1px solid var(--border-light)",
@@ -49,285 +36,287 @@ const inputStyle = {
   border: "1px solid var(--border-light)",
   background: "var(--bg-primary)",
   color: "var(--text-primary)",
-  width: "100%",
   boxSizing: "border-box",
 };
 
-const ACTIVITY_PALETTE = [
-  "#7F77DD", "#378ADD", "#1D9E75", "#BA7517", "#D85A30",
-  "#E24B4A", "#888780", "#5B8C5A", "#9B59B6", "#2980B9",
-];
+const selectStyle = {
+  fontFamily: "inherit",
+  fontSize: 11,
+  padding: "3px 6px",
+  borderRadius: 4,
+  border: "1px solid var(--border-light)",
+  cursor: "pointer",
+};
 
-function activityColor(activities, actId) {
-  const idx = activities.findIndex((a) => a.id === actId);
-  return idx >= 0 ? ACTIVITY_PALETTE[idx % ACTIVITY_PALETTE.length] : "#888";
-}
-
-// ── Day formatting helpers ──────────────────────────────────────────
-
-function fmtDay(iso) {
-  return new Date(iso + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" });
-}
-
-function fmtShortDate(iso) {
-  return new Date(iso + "T12:00:00").toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
 // Main component
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
 
 export default function Timesheet({
   activities,
-  timesheet,
-  timesheetSha,
   solutions,
-  onSave,
+  allEntries,
+  entriesLoading,
+  onRefreshEntries,
   onSaveActivities,
-  onWeekChange,
-  currentWeek,
-  loading,
   onRefresh,
 }) {
-  const [entries, setEntries] = useState(timesheet?.entries || []);
-  const [addingTo, setAddingTo] = useState(null); // date string or "burn"
-  const [copiedId, setCopiedId] = useState(null);
-  const [pendingOnly, setPendingOnly] = useState(false);
-  const [subView, setSubView] = useState("week"); // "week" | "activities"
+  const [subView, setSubView] = useState("entries"); // "entries" | "activities" | "import"
+
+  // ── Filters ──
+  const [filterEngagement, setFilterEngagement] = useState("");
+  const [filterSolution, setFilterSolution] = useState("");
+  const [filterSearch, setFilterSearch] = useState("");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
+  const [filterSplitOnly, setFilterSplitOnly] = useState(false);
+  const [filterUntaggedOnly, setFilterUntaggedOnly] = useState(false);
+
+  // ── Tag editing ──
+  const [tagEdits, setTagEdits] = useState({});
   const [saving, setSaving] = useState(false);
 
-  // Reset entries when timesheet prop changes (week navigation)
-  useEffect(() => {
-    setEntries(timesheet?.entries || []);
-    setAddingTo(null);
-  }, [timesheet]);
+  // ── Split ──
+  const [splitEntry, setSplitEntry] = useState(null);
 
-  const today = todayISO();
-  const dates = weekDates(currentWeek);
-  const isThisWeek = isoWeekKey(today) === currentWeek;
+  const isDirty = Object.keys(tagEdits).length > 0;
 
-  // Dirty detection
-  const isDirty = useMemo(
-    () => JSON.stringify(entries) !== JSON.stringify(timesheet?.entries || []),
-    [entries, timesheet]
+  // ── Derived data ──
+
+  const splitParentIds = useMemo(() => {
+    const ids = new Set();
+    for (const e of allEntries) {
+      if (e.parent_id) ids.add(e.parent_id);
+    }
+    return ids;
+  }, [allEntries]);
+
+  // All visible entries (split parents hidden)
+  const visibleEntries = useMemo(
+    () => allEntries.filter((e) => !splitParentIds.has(e.id)),
+    [allEntries, splitParentIds]
   );
 
-  // ── Entry helpers ─────────────────────────────────────────────────
+  // Filtered entries
+  const filtered = useMemo(() => {
+    let result = visibleEntries;
 
-  const burns = entries.filter((e) => e.end_date);
-  const points = entries.filter((e) => !e.end_date);
-  const entriesForDay = (date) => points.filter((e) => e.date === date);
-  const burnSpansDate = (burn, date) => date >= burn.date && date <= burn.end_date;
+    if (filterEngagement) {
+      result = result.filter((e) => e.activity_id === filterEngagement);
+    }
+    if (filterSolution) {
+      const sid = filterSolution;
+      result = result.filter((e) => getTag(e) === sid);
+    }
+    if (filterUntaggedOnly) {
+      result = result.filter((e) => !getTag(e));
+    }
+    if (filterSplitOnly) {
+      result = result.filter((e) => !!e.parent_id);
+    }
+    if (filterSearch) {
+      const q = filterSearch.toLowerCase();
+      result = result.filter((e) =>
+        (e.notes || "").toLowerCase().includes(q) ||
+        (e.engagement_task || "").toLowerCase().includes(q) ||
+        (e.task_category || "").toLowerCase().includes(q)
+      );
+    }
+    if (filterDateFrom) {
+      result = result.filter((e) => e.date >= filterDateFrom);
+    }
+    if (filterDateTo) {
+      result = result.filter((e) => e.date <= filterDateTo);
+    }
 
-  function burnVisibleDays(burn) {
-    return dates.filter((d) => burnSpansDate(burn, d)).length;
-  }
+    return result.sort((a, b) => b.date.localeCompare(a.date));
+  }, [visibleEntries, filterEngagement, filterSolution, filterUntaggedOnly, filterSplitOnly, filterSearch, filterDateFrom, filterDateTo, tagEdits]);
 
-  function burnTotalDays(burn) {
-    return businessDaysBetween(burn.date, burn.end_date);
-  }
-
-  function burnDailyHours(burn) {
-    const days = Math.max(1, burnTotalDays(burn));
-    return burn.hours / days;
-  }
-
-  function dayTotal(date) {
-    let h = 0;
-    entriesForDay(date).forEach((e) => (h += e.hours));
-    burns.forEach((b) => {
-      if (burnSpansDate(b, date)) h += burnDailyHours(b);
-    });
-    return h;
-  }
+  // Group by date
+  const groupedByDate = useMemo(() => {
+    const map = {};
+    for (const e of filtered) {
+      if (!map[e.date]) map[e.date] = [];
+      map[e.date].push(e);
+    }
+    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [filtered]);
 
   // Stats
-  const totalHours = entries.reduce((s, e) => s + e.hours, 0);
-  const submittedHours = entries
-    .filter((e) => e.submitted)
-    .reduce((s, e) => s + e.hours, 0);
-  const pendingHours = totalHours - submittedHours;
-  const pendingCount = entries.filter((e) => !e.submitted).length;
-  const customers = [
-    ...new Set(
-      entries
-        .map((e) => activities.find((a) => a.id === e.activity_id)?.customer)
-        .filter(Boolean)
-    ),
-  ];
+  const totalFilteredHours = Math.round(filtered.reduce((s, e) => s + (e.hours || 0), 0) * 10) / 10;
+  const taggedCount = filtered.filter((e) => getTag(e)).length;
+  const splitChildCount = filtered.filter((e) => !!e.parent_id).length;
 
-  // ── Mutations ─────────────────────────────────────────────────────
-
-  function addEntry(entry) {
-    setEntries((prev) => [...prev, entry]);
-    setAddingTo(null);
-  }
-
-  function removeEntry(id) {
-    setEntries((prev) => prev.filter((e) => e.id !== id));
-  }
-
-  function toggleSubmitted(id) {
-    setEntries((prev) =>
-      prev.map((e) => (e.id === id ? { ...e, submitted: !e.submitted } : e))
-    );
-  }
-
-  function updateEntry(id, updates) {
-    setEntries((prev) =>
-      prev.map((e) => (e.id === id ? { ...e, ...updates } : e))
-    );
-  }
-
-  function copyEntry(entry) {
-    const act = activities.find((a) => a.id === entry.activity_id);
-    const parts = [act?.code || act?.label || "", entry.hours + "h", entry.notes];
-    navigator.clipboard?.writeText(parts.filter(Boolean).join(" | "));
-    setCopiedId(entry.id);
-    setTimeout(() => setCopiedId(null), 1500);
-  }
-
-  function copyDayEntries(date) {
-    const dayEnts = entriesForDay(date).filter((e) => !e.submitted);
-    // Also include burn allocations for this day
-    const burnEnts = burns
-      .filter((b) => burnSpansDate(b, date) && !b.submitted)
-      .map((b) => ({
-        ...b,
-        hours: +burnDailyHours(b).toFixed(2),
-        _isBurn: true,
-      }));
-    const all = [...burnEnts, ...dayEnts];
-    const lines = all.map((e) => {
+  // Engagement options for filter
+  const engagementOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+    for (const e of visibleEntries) {
+      if (!e.activity_id || seen.has(e.activity_id)) continue;
+      seen.add(e.activity_id);
       const act = activities.find((a) => a.id === e.activity_id);
-      return [act?.code || act?.label || "", e.hours, e.notes, act?.default_task || ""].join("\t");
-    });
-    navigator.clipboard?.writeText("Activity\tHours\tNotes\tTask\n" + lines.join("\n"));
-    setCopiedId("day_" + date);
-    setTimeout(() => setCopiedId(null), 1500);
+      if (act) options.push({ id: act.id, label: `${act.customer} — ${act.label || act.code}` });
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  }, [visibleEntries, activities]);
+
+  // Solution options for filter
+  const solutionOptions = useMemo(() => {
+    return solutions.filter((s) => !s.excluded).sort((a, b) => a.title.localeCompare(b.title));
+  }, [solutions]);
+
+  // Active filter count (for "clear all" button)
+  const activeFilterCount = [
+    filterEngagement, filterSolution, filterSearch,
+    filterDateFrom, filterDateTo, filterSplitOnly, filterUntaggedOnly,
+  ].filter(Boolean).length;
+
+  // ── Tag helpers ──
+
+  function setTag(entryId, solutionId) {
+    const entry = visibleEntries.find((e) => e.id === entryId);
+    const original = entry?.solution_id || null;
+    if (solutionId === original) {
+      setTagEdits((prev) => { const next = { ...prev }; delete next[entryId]; return next; });
+    } else {
+      setTagEdits((prev) => ({ ...prev, [entryId]: solutionId }));
+    }
   }
 
-  async function handleSave() {
-    if (!onSave) return;
+  function getTag(entry) {
+    if (entry.id in tagEdits) return tagEdits[entry.id];
+    return entry.solution_id || null;
+  }
+
+  function discardChanges() {
+    setTagEdits({});
+  }
+
+  async function saveChanges() {
     setSaving(true);
     try {
-      await onSave(currentWeek, { week: currentWeek, entries }, timesheetSha);
+      const weekChanges = {};
+      for (const [entryId, solutionId] of Object.entries(tagEdits)) {
+        const entry = visibleEntries.find((e) => e.id === entryId);
+        if (!entry) continue;
+        const wk = isoWeekKey(entry.date);
+        if (!weekChanges[wk]) weekChanges[wk] = {};
+        weekChanges[wk][entryId] = solutionId;
+      }
+      for (const [weekKey, changes] of Object.entries(weekChanges)) {
+        const { data, sha } = await loadTimesheet(weekKey);
+        const updatedEntries = (data?.entries || []).map((e) => {
+          if (e.id in changes) return { ...e, solution_id: changes[e.id] };
+          return e;
+        });
+        await saveTimesheet(weekKey, { week: weekKey, entries: updatedEntries }, sha);
+      }
+      setTagEdits({});
+      if (onRefreshEntries) onRefreshEntries();
+    } catch (err) {
+      console.error("Failed to save tags:", err);
+      alert("Failed to save: " + err.message);
     } finally {
       setSaving(false);
     }
   }
 
-  function discardChanges() {
-    setEntries(timesheet?.entries || []);
+  // ── Split helpers ──
+
+  function getChildrenOf(parentId) {
+    return allEntries.filter((e) => e.parent_id === parentId);
   }
 
-  // ── Activity sub-view ─────────────────────────────────────────────
+  async function handleSplitSave(children) {
+    setSaving(true);
+    try {
+      const parentEntry = allEntries.find((e) => e.id === splitEntry.id) || splitEntry;
+      const wk = isoWeekKey(parentEntry.date);
+      const { data, sha } = await loadTimesheet(wk);
+      const existing = data?.entries || [];
+      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
+      const updated = [...cleaned, ...children];
+      await saveTimesheet(wk, { week: wk, entries: updated }, sha);
+      setSplitEntry(null);
+      if (onRefreshEntries) onRefreshEntries();
+    } catch (err) {
+      console.error("Failed to save split:", err);
+      alert("Failed to save split: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUnsplit() {
+    setSaving(true);
+    try {
+      const parentEntry = allEntries.find((e) => e.id === splitEntry.id) || splitEntry;
+      const wk = isoWeekKey(parentEntry.date);
+      const { data, sha } = await loadTimesheet(wk);
+      const existing = data?.entries || [];
+      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
+      await saveTimesheet(wk, { week: wk, entries: cleaned }, sha);
+      setSplitEntry(null);
+      if (onRefreshEntries) onRefreshEntries();
+    } catch (err) {
+      console.error("Failed to unsplit:", err);
+      alert("Failed to unsplit: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function clearFilters() {
+    setFilterEngagement("");
+    setFilterSolution("");
+    setFilterSearch("");
+    setFilterDateFrom("");
+    setFilterDateTo("");
+    setFilterSplitOnly(false);
+    setFilterUntaggedOnly(false);
+  }
+
+  // ── Sub-views ──
 
   if (subView === "activities") {
     return (
       <ActivityManager
         activities={activities}
         onSave={onSaveActivities}
-        onBack={() => setSubView("week")}
+        onBack={() => setSubView("entries")}
       />
     );
   }
 
-  // ── Import entries sub-view ─────────────────────────────────────
-
-  if (subView === "import-entries") {
+  if (subView === "import") {
     return (
       <TimeEntryImport
         activities={activities}
         onComplete={() => {
-          setSubView("week");
-          if (typeof onRefresh === "function") onRefresh();
+          setSubView("entries");
+          if (onRefreshEntries) onRefreshEntries();
+          if (onRefresh) onRefresh();
         }}
-        onCancel={() => setSubView("week")}
+        onCancel={() => setSubView("entries")}
       />
     );
   }
 
-  // ── Main weekly view ──────────────────────────────────────────────
+  // ── Main entries view ──
+
+  // Solutions linked to a given entry's engagement
+  function linkedSolutions(entry) {
+    return solutionOptions.filter((s) => s.activity_id === entry.activity_id);
+  }
 
   return (
     <div>
-      {/* Week header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 16,
-          flexWrap: "wrap",
-          gap: 8,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button
-            onClick={() => onWeekChange(offsetWeek(currentWeek, -1))}
-            style={{
-              ...pillBtn,
-              padding: "4px 8px",
-              color: "var(--text-secondary)",
-            }}
-          >
-            <i className="ti ti-chevron-left" style={{ fontSize: 14 }} />
-          </button>
-          <div>
-            <span style={{ fontSize: 18, fontWeight: 500 }}>
-              {fmtShortDate(dates[0])} — {fmtShortDate(dates[4])}
-            </span>
-            <span
-              style={{
-                fontSize: 12,
-                color: "var(--text-tertiary)",
-                marginLeft: 8,
-              }}
-            >
-              {currentWeek}
-            </span>
-          </div>
-          <button
-            onClick={() => onWeekChange(offsetWeek(currentWeek, 1))}
-            style={{
-              ...pillBtn,
-              padding: "4px 8px",
-              color: "var(--text-secondary)",
-            }}
-          >
-            <i className="ti ti-chevron-right" style={{ fontSize: 14 }} />
-          </button>
-          {!isThisWeek && (
-            <button
-              onClick={() => onWeekChange(isoWeekKey(today))}
-              style={{
-                ...pillBtn,
-                fontSize: 11,
-                color: "var(--text-secondary)",
-              }}
-            >
-              This week
-            </button>
-          )}
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 18, fontWeight: 500, color: "var(--text-primary)" }}>
+          Time Entries
         </div>
-
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <button
-            onClick={() => setPendingOnly(!pendingOnly)}
-            style={{
-              ...pillBtn,
-              background: pendingOnly ? "#E24B4A" : "transparent",
-              color: pendingOnly ? "#fff" : "var(--text-secondary)",
-              borderColor: pendingOnly ? "#E24B4A" : undefined,
-            }}
-          >
-            <i className="ti ti-filter" style={{ fontSize: 13 }} />
-            {pendingOnly ? "Pending only" : "All entries"}
-          </button>
           <button
             onClick={() => setSubView("activities")}
             style={{ ...pillBtn, color: "var(--text-secondary)" }}
@@ -336,1395 +325,462 @@ export default function Timesheet({
             Activities
           </button>
           <button
-            onClick={() => setSubView("import-entries")}
+            onClick={() => setSubView("import")}
             style={{ ...pillBtn, color: "var(--text-secondary)" }}
           >
             <i className="ti ti-file-import" style={{ fontSize: 13 }} />
             Import
           </button>
+          {onRefreshEntries && (
+            <button
+              onClick={onRefreshEntries}
+              disabled={entriesLoading}
+              style={{ ...pillBtn, color: "var(--text-secondary)", opacity: entriesLoading ? 0.5 : 1 }}
+            >
+              <i className="ti ti-refresh" style={{ fontSize: 13 }} />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Loading indicator */}
-      {loading && (
-        <div
-          style={{
-            textAlign: "center",
-            padding: "24px 0",
-            color: "var(--text-secondary)",
-            fontSize: 13,
-          }}
-        >
-          <span
-            style={{
-              display: "inline-block",
-              width: 16,
-              height: 16,
-              border: "2px solid var(--border-light)",
-              borderTopColor: "var(--text-primary)",
-              borderRadius: "50%",
-              animation: "spin 0.8s linear infinite",
-              verticalAlign: -3,
-              marginRight: 8,
-            }}
-          />
-          Loading timesheet…
-        </div>
-      )}
+      {/* Stats */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <StatCard icon="clock" label="Hours" value={`${totalFilteredHours}h`} sub={`${filtered.length} entries`} />
+        <StatCard
+          icon="tag"
+          label="Tagged"
+          value={`${taggedCount}/${filtered.length}`}
+          sub={filtered.length - taggedCount > 0 ? `${filtered.length - taggedCount} untagged` : "All tagged"}
+        />
+        {splitChildCount > 0 && (
+          <StatCard icon="scissors" label="Split" value={splitChildCount} sub="child entries" />
+        )}
+      </div>
 
-      {/* Stat cards */}
-      {!loading && (
-        <>
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 10,
-              marginBottom: 20,
-            }}
-          >
-            <StatCard
-              icon="clock"
-              label="Total hours"
-              value={totalHours.toFixed(1)}
-              sub={`${entries.length} entries`}
-            />
-            <StatCard
-              icon="circle-check"
-              label="Submitted"
-              value={submittedHours.toFixed(1)}
-              valueColor="#1D9E75"
-              sub={`${entries.filter((e) => e.submitted).length} entries`}
-            />
-            <StatCard
-              icon="alert-circle"
-              label="Pending"
-              value={pendingHours.toFixed(1)}
-              valueColor={pendingHours > 0 ? "#E24B4A" : undefined}
-              sub={`${pendingCount} to enter`}
-            />
-            <StatCard
-              icon="users"
-              label="Customers"
-              value={customers.length}
-              sub={customers.join(", ") || "—"}
-            />
-          </div>
-
-          {/* ── Burn blocks ── */}
-          {burns.length > 0 && (
-            <div style={{ ...cardBorder, padding: 16, marginBottom: 14 }}>
-              <div
-                style={{
-                  ...sectionTitle,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                }}
-              >
-                <span>
-                  <i
-                    className="ti ti-flame"
-                    style={{ fontSize: 14, marginRight: 6, verticalAlign: -1 }}
-                  />
-                  Controlled Burns
-                </span>
-                <button
-                  onClick={() =>
-                    setAddingTo(addingTo === "burn" ? null : "burn")
-                  }
-                  style={{
-                    ...pillBtn,
-                    fontSize: 11,
-                    padding: "3px 8px",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  <i className="ti ti-plus" style={{ fontSize: 12 }} />
-                  Add burn
-                </button>
-              </div>
-
-              {burns
-                .filter((b) => !pendingOnly || !b.submitted)
-                .map((burn) => {
-                  const act = activities.find(
-                    (a) => a.id === burn.activity_id
-                  );
-                  const color = activityColor(activities, burn.activity_id);
-                  const startIdx = Math.max(
-                    0,
-                    dates.indexOf(
-                      dates.find((d) => d >= burn.date) || dates[0]
-                    )
-                  );
-                  const endIdx = Math.min(
-                    4,
-                    dates.indexOf(
-                      [...dates].reverse().find((d) => d <= burn.end_date) ||
-                        dates[4]
-                    )
-                  );
-                  const span = endIdx - startIdx + 1;
-
-                  return (
-                    <div key={burn.id} style={{ marginBottom: 14 }}>
-                      {/* Burn bar */}
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(5, 1fr)",
-                          gap: 4,
-                        }}
-                      >
-                        {startIdx > 0 && (
-                          <div
-                            style={{
-                              gridColumn: `1 / ${startIdx + 1}`,
-                            }}
-                          />
-                        )}
-                        <div
-                          style={{
-                            gridColumn: `${startIdx + 1} / ${startIdx + span + 1}`,
-                            background: color + "14",
-                            border: `1px solid ${color}35`,
-                            borderRadius: 8,
-                            padding: "10px 14px",
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                          }}
-                        >
-                          <div>
-                            <div
-                              style={{
-                                fontSize: 13,
-                                fontWeight: 500,
-                                color: "var(--text-primary)",
-                              }}
-                            >
-                              {act?.label || burn.activity_id}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: 11,
-                                color: "var(--text-secondary)",
-                                marginTop: 1,
-                              }}
-                            >
-                              {burn.notes}
-                            </div>
-                          </div>
-                          <div
-                            style={{
-                              textAlign: "right",
-                              flexShrink: 0,
-                              marginLeft: 12,
-                            }}
-                          >
-                            <div
-                              style={{
-                                fontSize: 15,
-                                fontWeight: 500,
-                                color,
-                              }}
-                            >
-                              {burn.hours}h
-                            </div>
-                            <div
-                              style={{
-                                fontSize: 10,
-                                color: "var(--text-tertiary)",
-                              }}
-                            >
-                              {burnDailyHours(burn).toFixed(1)}h/day
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Per-day allocation */}
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(5, 1fr)",
-                          gap: 4,
-                          marginTop: 3,
-                        }}
-                      >
-                        {dates.map((d) => (
-                          <div
-                            key={d}
-                            style={{
-                              fontSize: 10,
-                              color: burnSpansDate(burn, d)
-                                ? color
-                                : "transparent",
-                              textAlign: "center",
-                              fontWeight: 500,
-                            }}
-                          >
-                            {burnSpansDate(burn, d)
-                              ? burnDailyHours(burn).toFixed(1) + "h"
-                              : "·"}
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Status row */}
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                          marginTop: 6,
-                        }}
-                      >
-                        <button
-                          onClick={() => toggleSubmitted(burn.id)}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            padding: 0,
-                            cursor: "pointer",
-                            color: burn.submitted
-                              ? "#1D9E75"
-                              : "var(--text-tertiary)",
-                            fontSize: 16,
-                          }}
-                        >
-                          <i
-                            className={
-                              burn.submitted
-                                ? "ti ti-circle-check-filled"
-                                : "ti ti-circle"
-                            }
-                          />
-                        </button>
-                        <span
-                          style={{
-                            fontSize: 11,
-                            color: burn.submitted
-                              ? "#1D9E75"
-                              : "var(--text-tertiary)",
-                          }}
-                        >
-                          {burn.submitted
-                            ? "Submitted to Kantata"
-                            : "Not submitted"}
-                        </span>
-                        <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
-                          {!burn.submitted && (
-                            <button
-                              onClick={() => copyEntry(burn)}
-                              style={{
-                                ...pillBtn,
-                                fontSize: 11,
-                                padding: "2px 8px",
-                                color:
-                                  copiedId === burn.id
-                                    ? "#1D9E75"
-                                    : "var(--text-tertiary)",
-                                borderColor:
-                                  copiedId === burn.id
-                                    ? "#1D9E75"
-                                    : undefined,
-                              }}
-                            >
-                              <i
-                                className={
-                                  copiedId === burn.id
-                                    ? "ti ti-check"
-                                    : "ti ti-copy"
-                                }
-                                style={{ fontSize: 12 }}
-                              />
-                              {copiedId === burn.id ? "Copied" : "Copy"}
-                            </button>
-                          )}
-                          <button
-                            onClick={() => removeEntry(burn.id)}
-                            style={{
-                              ...pillBtn,
-                              fontSize: 11,
-                              padding: "2px 8px",
-                              color: "var(--text-tertiary)",
-                            }}
-                          >
-                            <i
-                              className="ti ti-trash"
-                              style={{ fontSize: 12 }}
-                            />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-
-              {/* Add burn form */}
-              {addingTo === "burn" && (
-                <EntryForm
-                  activities={activities}
-                  solutions={solutions}
-                  isBurn
-                  defaultDate={dates[0]}
-                  defaultEndDate={dates[4]}
-                  onAdd={addEntry}
-                  onCancel={() => setAddingTo(null)}
-                />
-              )}
-
-              {burns.length === 0 && addingTo !== "burn" && (
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--text-tertiary)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  No controlled burns this week
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Add burn button when no burns yet */}
-          {burns.length === 0 && (
-            <div style={{ marginBottom: 14 }}>
-              {addingTo === "burn" ? (
-                <div style={{ ...cardBorder, padding: 16 }}>
-                  <div style={sectionTitle}>
-                    <i
-                      className="ti ti-flame"
-                      style={{
-                        fontSize: 14,
-                        marginRight: 6,
-                        verticalAlign: -1,
-                      }}
-                    />
-                    New Controlled Burn
-                  </div>
-                  <EntryForm
-                    activities={activities}
-                    solutions={solutions}
-                    isBurn
-                    defaultDate={dates[0]}
-                    defaultEndDate={dates[4]}
-                    onAdd={addEntry}
-                    onCancel={() => setAddingTo(null)}
-                  />
-                </div>
-              ) : (
-                <button
-                  onClick={() => setAddingTo("burn")}
-                  style={{
-                    ...pillBtn,
-                    color: "var(--text-secondary)",
-                    width: "100%",
-                    justifyContent: "center",
-                    padding: "10px 0",
-                    borderStyle: "dashed",
-                  }}
-                >
-                  <i className="ti ti-flame" style={{ fontSize: 14 }} />
-                  Add controlled burn
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* ── Day-by-day entries ── */}
-          <div style={{ ...cardBorder, padding: 16 }}>
-            <div style={sectionTitle}>
-              <i
-                className="ti ti-list"
-                style={{ fontSize: 14, marginRight: 6, verticalAlign: -1 }}
-              />
-              Entries
-            </div>
-
-            {dates.map((date) => {
-              const dayEnts = entriesForDay(date).filter(
-                (e) => !pendingOnly || !e.submitted
-              );
-              const dt = dayTotal(date);
-              const isToday = date === today;
-              if (pendingOnly && dayEnts.length === 0) return null;
-
-              return (
-                <div key={date} style={{ marginBottom: 16 }}>
-                  {/* Day header */}
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "6px 0",
-                      borderBottom: "0.5px solid var(--border-light)",
-                      marginBottom: 6,
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 500,
-                          color: isToday
-                            ? "#378ADD"
-                            : "var(--text-primary)",
-                        }}
-                      >
-                        {fmtDay(date)}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: 12,
-                          color: "var(--text-secondary)",
-                        }}
-                      >
-                        {fmtShortDate(date)}
-                      </span>
-                      {isToday && (
-                        <span
-                          style={{
-                            fontSize: 10,
-                            padding: "2px 6px",
-                            borderRadius: 99,
-                            background: "#378ADD18",
-                            color: "#378ADD",
-                            fontWeight: 500,
-                          }}
-                        >
-                          Today
-                        </span>
-                      )}
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 500,
-                          color:
-                            dt >= 8
-                              ? "#1D9E75"
-                              : "var(--text-primary)",
-                        }}
-                      >
-                        {dt.toFixed(1)}h
-                      </span>
-                      {dayEnts.filter((e) => !e.submitted).length > 0 && (
-                        <button
-                          onClick={() => copyDayEntries(date)}
-                          style={{
-                            ...pillBtn,
-                            fontSize: 11,
-                            padding: "2px 8px",
-                            color:
-                              copiedId === "day_" + date
-                                ? "#1D9E75"
-                                : "var(--text-tertiary)",
-                          }}
-                        >
-                          <i
-                            className={
-                              copiedId === "day_" + date
-                                ? "ti ti-check"
-                                : "ti ti-copy"
-                            }
-                            style={{ fontSize: 12 }}
-                          />
-                          Day
-                        </button>
-                      )}
-                      <button
-                        onClick={() =>
-                          setAddingTo(addingTo === date ? null : date)
-                        }
-                        style={{
-                          ...pillBtn,
-                          padding: "2px 6px",
-                          color: "var(--text-secondary)",
-                        }}
-                      >
-                        <i className="ti ti-plus" style={{ fontSize: 13 }} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Entries for this day */}
-                  {dayEnts.length === 0 && addingTo !== date && (
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: "var(--text-tertiary)",
-                        padding: "4px 0",
-                        fontStyle: "italic",
-                      }}
-                    >
-                      No entries
-                    </div>
-                  )}
-
-                  {dayEnts.map((entry) => {
-                    const act = activities.find(
-                      (a) => a.id === entry.activity_id
-                    );
-                    const color = activityColor(
-                      activities,
-                      entry.activity_id
-                    );
-
-                    return (
-                      <div
-                        key={entry.id}
-                        style={{
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: 10,
-                          padding: "8px 8px 8px 12px",
-                          marginBottom: 4,
-                          borderRadius: 8,
-                          background: "var(--bg-secondary)",
-                          borderLeft: `3px solid ${color}`,
-                        }}
-                      >
-                        {/* Submitted toggle */}
-                        <button
-                          onClick={() => toggleSubmitted(entry.id)}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            padding: 0,
-                            cursor: "pointer",
-                            color: entry.submitted
-                              ? "#1D9E75"
-                              : "var(--border-mid)",
-                            fontSize: 17,
-                            marginTop: 1,
-                            flexShrink: 0,
-                          }}
-                        >
-                          <i
-                            className={
-                              entry.submitted
-                                ? "ti ti-circle-check-filled"
-                                : "ti ti-circle"
-                            }
-                          />
-                        </button>
-
-                        {/* Content */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 6,
-                              marginBottom: 2,
-                              flexWrap: "wrap",
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: 13,
-                                fontWeight: 500,
-                                color: "var(--text-primary)",
-                              }}
-                            >
-                              {act?.label || entry.activity_id}
-                            </span>
-                            <SolutionTag
-                              entry={entry}
-                              solutions={solutions}
-                              onUpdate={(solutionId) =>
-                                updateEntry(entry.id, { solution_id: solutionId })
-                              }
-                            />
-                            {entry.task_category && (
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  padding: "1px 6px",
-                                  borderRadius: 99,
-                                  background: "var(--bg-tertiary)",
-                                  color: "var(--text-secondary)",
-                                  fontWeight: 500,
-                                }}
-                              >
-                                {entry.task_category}
-                              </span>
-                            )}
-                          </div>
-                          <div
-                            style={{
-                              fontSize: 12,
-                              color: "var(--text-secondary)",
-                              lineHeight: 1.4,
-                            }}
-                          >
-                            {entry.notes}
-                          </div>
-                          <div
-                            style={{
-                              fontSize: 10,
-                              color: "var(--text-tertiary)",
-                              marginTop: 3,
-                            }}
-                          >
-                            {act?.code}
-                          </div>
-                        </div>
-
-                        {/* Hours + actions */}
-                        <div
-                          style={{
-                            textAlign: "right",
-                            flexShrink: 0,
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "flex-end",
-                            gap: 4,
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontSize: 15,
-                              fontWeight: 500,
-                              color: "var(--text-primary)",
-                            }}
-                          >
-                            {entry.hours}h
-                          </div>
-                          <div
-                            style={{
-                              display: "flex",
-                              gap: 4,
-                            }}
-                          >
-                            {!entry.submitted && (
-                              <button
-                                onClick={() => copyEntry(entry)}
-                                style={{
-                                  background: "none",
-                                  border: "none",
-                                  padding: 0,
-                                  cursor: "pointer",
-                                  color:
-                                    copiedId === entry.id
-                                      ? "#1D9E75"
-                                      : "var(--text-tertiary)",
-                                  fontSize: 12,
-                                  fontFamily: "inherit",
-                                }}
-                              >
-                                <i
-                                  className={
-                                    copiedId === entry.id
-                                      ? "ti ti-check"
-                                      : "ti ti-copy"
-                                  }
-                                  style={{ fontSize: 13 }}
-                                />
-                              </button>
-                            )}
-                            <button
-                              onClick={() => removeEntry(entry.id)}
-                              style={{
-                                background: "none",
-                                border: "none",
-                                padding: 0,
-                                cursor: "pointer",
-                                color: "var(--text-tertiary)",
-                                fontSize: 12,
-                              }}
-                            >
-                              <i
-                                className="ti ti-trash"
-                                style={{ fontSize: 13 }}
-                              />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {/* Inline add form */}
-                  {addingTo === date && (
-                    <EntryForm
-                      activities={activities}
-                      solutions={solutions}
-                      defaultDate={date}
-                      onAdd={addEntry}
-                      onCancel={() => setAddingTo(null)}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* ── Kantata export table ── */}
-          {pendingCount > 0 && (
-            <div style={{ ...cardBorder, padding: 16, marginTop: 14 }}>
-              <div style={sectionTitle}>
-                <i
-                  className="ti ti-upload"
-                  style={{ fontSize: 14, marginRight: 6, verticalAlign: -1 }}
-                />
-                Kantata Export Preview
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "var(--text-secondary)",
-                  marginBottom: 10,
-                }}
-              >
-                {pendingCount} pending{" "}
-                {pendingCount === 1 ? "entry" : "entries"} ·{" "}
-                {pendingHours.toFixed(1)}h to submit
-              </div>
-              <div
-                style={{
-                  borderRadius: 8,
-                  overflow: "hidden",
-                  border: "0.5px solid var(--border-light)",
-                }}
-              >
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 12,
-                  }}
-                >
-                  <thead>
-                    <tr style={{ background: "var(--bg-secondary)" }}>
-                      {["Day", "Activity", "Hours", "Notes", "Task", ""].map(
-                        (h) => (
-                          <th
-                            key={h}
-                            style={{
-                              textAlign: "left",
-                              padding: "8px 10px",
-                              fontWeight: 500,
-                              color: "var(--text-secondary)",
-                              borderBottom: "0.5px solid var(--border-light)",
-                            }}
-                          >
-                            {h}
-                          </th>
-                        )
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entries
-                      .filter((e) => !e.submitted)
-                      .flatMap((e) => {
-                        if (e.end_date) {
-                          return dates
-                            .filter(
-                              (d) => d >= e.date && d <= e.end_date
-                            )
-                            .map((d) => ({
-                              ...e,
-                              date: d,
-                              hours: +burnDailyHours(e).toFixed(2),
-                              _row: true,
-                            }));
-                        }
-                        return [e];
-                      })
-                      .sort((a, b) => a.date.localeCompare(b.date))
-                      .map((row, i) => {
-                        const act = activities.find(
-                          (a) => a.id === row.activity_id
-                        );
-                        return (
-                          <tr
-                            key={i}
-                            style={{
-                              borderBottom:
-                                "0.5px solid var(--border-light)",
-                            }}
-                          >
-                            <td
-                              style={{
-                                padding: "7px 10px",
-                                color: "var(--text-secondary)",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {fmtDay(row.date)}{" "}
-                              {new Date(row.date + "T12:00:00").getDate()}
-                            </td>
-                            <td
-                              style={{
-                                padding: "7px 10px",
-                                fontWeight: 500,
-                              }}
-                            >
-                              {act?.label || row.activity_id}
-                            </td>
-                            <td style={{ padding: "7px 10px" }}>
-                              {row.hours}
-                            </td>
-                            <td
-                              style={{
-                                padding: "7px 10px",
-                                color: "var(--text-secondary)",
-                                maxWidth: 200,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {row.notes}
-                            </td>
-                            <td
-                              style={{
-                                padding: "7px 10px",
-                                color: "var(--text-tertiary)",
-                              }}
-                            >
-                              {row.engagement_task ||
-                                act?.default_task ||
-                                "—"}
-                            </td>
-                            <td style={{ padding: "7px 10px" }}>
-                              <button
-                                onClick={() => copyEntry(row)}
-                                style={{
-                                  background: "none",
-                                  border: "none",
-                                  cursor: "pointer",
-                                  color:
-                                    copiedId === row.id
-                                      ? "#1D9E75"
-                                      : "var(--text-tertiary)",
-                                  fontSize: 13,
-                                }}
-                              >
-                                <i
-                                  className={
-                                    copiedId === row.id
-                                      ? "ti ti-check"
-                                      : "ti ti-copy"
-                                  }
-                                />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ── Sticky save bar ── */}
-      {isDirty && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 0,
-            left: 0,
-            right: 0,
-            background: "var(--bg-primary)",
-            borderTop: "1px solid var(--border-mid)",
-            padding: "10px 20px",
-            display: "flex",
-            justifyContent: "center",
-            gap: 8,
-            zIndex: 100,
-          }}
-        >
-          <button
-            onClick={discardChanges}
-            style={{
-              ...pillBtn,
-              padding: "6px 16px",
-              color: "var(--text-secondary)",
-            }}
-          >
-            Discard
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            style={{
-              ...pillBtn,
-              padding: "6px 16px",
-              background: "var(--text-primary)",
-              color: "var(--bg-primary)",
-              borderColor: "var(--text-primary)",
-              fontWeight: 500,
-              opacity: saving ? 0.6 : 1,
-            }}
-          >
-            {saving ? "Saving…" : "Save timesheet"}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// Entry form (used for both point entries and burns)
-// ═════════════════════════════════════════════════════════════════════
-
-function EntryForm({
-  activities,
-  solutions,
-  isBurn,
-  defaultDate,
-  defaultEndDate,
-  onAdd,
-  onCancel,
-}) {
-  const [actId, setActId] = useState(activities[0]?.id || "");
-  const [hours, setHours] = useState("");
-  const [notes, setNotes] = useState("");
-  const [endDate, setEndDate] = useState(defaultEndDate || "");
-  const [solutionId, setSolutionId] = useState("");
-  const [taskCategory, setTaskCategory] = useState("");
-  const [engagementTask, setEngagementTask] = useState("");
-  const [ticket, setTicket] = useState("");
-  const [showAdvanced, setShowAdvanced] = useState(false);
-
-  const selectedAct = activities.find((a) => a.id === actId);
-
-  return (
-    <div
-      style={{
-        padding: 12,
-        borderRadius: 8,
-        background: "var(--bg-secondary)",
-        marginTop: 6,
-      }}
-    >
+      {/* Filter bar */}
       <div
         style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 80px",
-          gap: 8,
-          marginBottom: 8,
+          display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center",
         }}
       >
         <select
-          value={actId}
-          onChange={(e) => setActId(e.target.value)}
-          style={{ ...inputStyle, cursor: "pointer" }}
-        >
-          {activities
-            .filter((a) => !a.archived)
-            .map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.label}
-              </option>
-            ))}
-          {activities.filter((a) => !a.archived).length === 0 && (
-            <option value="">No activities — add one first</option>
-          )}
-        </select>
-        <input
-          type="number"
-          step="0.25"
-          min="0"
-          placeholder="Hrs"
-          value={hours}
-          onChange={(e) => setHours(e.target.value)}
-          style={{ ...inputStyle, textAlign: "right" }}
-        />
-      </div>
-
-      <input
-        type="text"
-        placeholder="Notes (e.g. Call with Marisol)"
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        style={{ ...inputStyle, marginBottom: 8 }}
-      />
-
-      {isBurn && (
-        <div
+          value={filterEngagement}
+          onChange={(e) => setFilterEngagement(e.target.value)}
           style={{
-            display: "flex",
-            gap: 8,
-            marginBottom: 8,
-            alignItems: "center",
+            ...selectStyle,
+            fontSize: 12,
+            padding: "5px 8px",
+            color: filterEngagement ? "var(--text-primary)" : "var(--text-secondary)",
+            minWidth: 180,
           }}
         >
-          <label
-            style={{
-              fontSize: 12,
-              color: "var(--text-secondary)",
-              whiteSpace: "nowrap",
-            }}
+          <option value="">All engagements</option>
+          {engagementOptions.map((o) => (
+            <option key={o.id} value={o.id}>{o.label}</option>
+          ))}
+        </select>
+
+        <select
+          value={filterSolution}
+          onChange={(e) => { setFilterSolution(e.target.value); if (e.target.value) setFilterUntaggedOnly(false); }}
+          style={{
+            ...selectStyle,
+            fontSize: 12,
+            padding: "5px 8px",
+            color: filterSolution ? "#185FA5" : "var(--text-secondary)",
+            minWidth: 160,
+          }}
+        >
+          <option value="">All solutions</option>
+          {solutionOptions.map((s) => (
+            <option key={s.id} value={s.id}>{s.title}</option>
+          ))}
+        </select>
+
+        <input
+          value={filterSearch}
+          onChange={(e) => setFilterSearch(e.target.value)}
+          placeholder="Search notes…"
+          style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 160 }}
+        />
+
+        <input
+          type="date"
+          value={filterDateFrom}
+          onChange={(e) => setFilterDateFrom(e.target.value)}
+          style={{ ...inputStyle, fontSize: 11, padding: "4px 6px", width: 120 }}
+          title="From date"
+        />
+        <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>→</span>
+        <input
+          type="date"
+          value={filterDateTo}
+          onChange={(e) => setFilterDateTo(e.target.value)}
+          style={{ ...inputStyle, fontSize: 11, padding: "4px 6px", width: 120 }}
+          title="To date"
+        />
+
+        <button
+          onClick={() => { setFilterUntaggedOnly(!filterUntaggedOnly); if (!filterUntaggedOnly) setFilterSolution(""); }}
+          style={{
+            ...pillBtn,
+            fontSize: 11,
+            padding: "4px 10px",
+            background: filterUntaggedOnly ? "#BA7517" : "transparent",
+            color: filterUntaggedOnly ? "#fff" : "var(--text-secondary)",
+            borderColor: filterUntaggedOnly ? "#BA7517" : undefined,
+          }}
+        >
+          Untagged
+        </button>
+
+        <button
+          onClick={() => setFilterSplitOnly(!filterSplitOnly)}
+          style={{
+            ...pillBtn,
+            fontSize: 11,
+            padding: "4px 10px",
+            background: filterSplitOnly ? "var(--text-primary)" : "transparent",
+            color: filterSplitOnly ? "var(--bg-primary)" : "var(--text-secondary)",
+            borderColor: filterSplitOnly ? "var(--text-primary)" : undefined,
+          }}
+        >
+          <i className="ti ti-scissors" style={{ fontSize: 12 }} />
+          Splits
+        </button>
+
+        {activeFilterCount > 0 && (
+          <button
+            onClick={clearFilters}
+            style={{ ...pillBtn, fontSize: 11, padding: "4px 10px", color: "#E24B4A", borderColor: "rgba(226,75,74,0.3)" }}
           >
-            Through:
-          </label>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            style={{ ...inputStyle, width: 160 }}
-          />
-          {hours && endDate && defaultDate && (
-            <span
+            <i className="ti ti-x" style={{ fontSize: 12 }} />
+            Clear ({activeFilterCount})
+          </button>
+        )}
+      </div>
+
+      {/* Loading */}
+      {entriesLoading && filtered.length === 0 && (
+        <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-secondary)", fontSize: 13 }}>
+          Loading time entries…
+        </div>
+      )}
+
+      {/* Entry table */}
+      {filtered.length > 0 && (
+        <div style={{
+          border: "0.5px solid var(--border-light)",
+          borderRadius: "var(--radius-lg)",
+          overflow: "hidden",
+        }}>
+          {/* Table header */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "82px minmax(100px, 1fr) minmax(120px, 2fr) 160px 56px 32px",
+            padding: "8px 14px",
+            background: "var(--bg-secondary)",
+            fontSize: 11, fontWeight: 500, color: "var(--text-secondary)",
+            textTransform: "uppercase", letterSpacing: "0.03em",
+          }}>
+            <span>Date</span>
+            <span>Engagement</span>
+            <span>Notes</span>
+            <span>Solution</span>
+            <span style={{ textAlign: "right" }}>Hours</span>
+            <span />
+          </div>
+
+          {/* Entry rows */}
+          {groupedByDate.map(([date, dayEntries]) =>
+            dayEntries.map((entry, idx) => {
+              const tagValue = getTag(entry);
+              const isEdited = entry.id in tagEdits;
+              const isChild = !!entry.parent_id;
+              const parentEntry = isChild ? allEntries.find((e) => e.id === entry.parent_id) : null;
+              const act = activities.find((a) => a.id === entry.activity_id);
+              const entryLinkedSolutions = linkedSolutions(entry);
+
+              return (
+                <div
+                  key={entry.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "82px minmax(100px, 1fr) minmax(120px, 2fr) 160px 56px 32px",
+                    padding: "7px 14px",
+                    borderTop: "0.5px solid var(--border-light)",
+                    alignItems: "center",
+                    fontSize: 13,
+                    background: isEdited ? "rgba(24,95,165,0.03)" : isChild ? "rgba(0,0,0,0.015)" : "transparent",
+                  }}
+                >
+                  {/* Date */}
+                  <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    {idx === 0 ? formatDate(date) : ""}
+                  </span>
+
+                  {/* Engagement */}
+                  <span style={{ fontSize: 11, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {act ? act.customer : "—"}
+                  </span>
+
+                  {/* Notes */}
+                  <span style={{
+                    color: "var(--text-primary)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    paddingRight: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}>
+                    {isChild && (
+                      <i className="ti ti-corner-down-right" style={{ fontSize: 12, color: "var(--text-tertiary)", flexShrink: 0 }} />
+                    )}
+                    {entry.notes || (
+                      <span style={{ color: "var(--text-tertiary)", fontStyle: "italic", fontSize: 12 }}>
+                        {entry.engagement_task || "—"}
+                      </span>
+                    )}
+                  </span>
+
+                  {/* Solution tag */}
+                  <span>
+                    {entryLinkedSolutions.length > 0 ? (
+                      <select
+                        value={tagValue || ""}
+                        onChange={(e) => setTag(entry.id, e.target.value || null)}
+                        style={{
+                          ...selectStyle,
+                          background: tagValue ? "#185FA508" : "var(--bg-primary)",
+                          color: tagValue ? "#185FA5" : "var(--text-secondary)",
+                          fontWeight: tagValue ? 500 : 400,
+                          maxWidth: 150,
+                          width: "100%",
+                        }}
+                      >
+                        <option value="">— Untagged —</option>
+                        {entryLinkedSolutions.map((s) => (
+                          <option key={s.id} value={s.id}>{s.title}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>—</span>
+                    )}
+                  </span>
+
+                  {/* Hours */}
+                  <span style={{ textAlign: "right", fontWeight: 500, color: "var(--text-primary)" }}>
+                    {entry.hours}h
+                  </span>
+
+                  {/* Split action */}
+                  <span style={{ textAlign: "center" }}>
+                    {isChild ? (
+                      <button
+                        onClick={() => parentEntry && setSplitEntry(parentEntry)}
+                        title="Edit split"
+                        style={{
+                          background: "none", border: "none", cursor: "pointer",
+                          color: "var(--text-tertiary)", fontSize: 13, padding: 2,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-primary)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-tertiary)"; }}
+                      >
+                        <i className="ti ti-edit" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setSplitEntry(entry)}
+                        title="Split entry"
+                        style={{
+                          background: "none", border: "none", cursor: "pointer",
+                          color: "var(--text-tertiary)", fontSize: 13, padding: 2,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-primary)"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-tertiary)"; }}
+                      >
+                        <i className="ti ti-scissors" />
+                      </button>
+                    )}
+                  </span>
+                </div>
+              );
+            })
+          )}
+
+          {/* Totals */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "82px minmax(100px, 1fr) minmax(120px, 2fr) 160px 56px 32px",
+            padding: "10px 14px",
+            borderTop: "1.5px solid var(--border-mid)",
+            fontSize: 13, fontWeight: 500,
+          }}>
+            <span style={{ color: "var(--text-primary)" }}>Total</span>
+            <span />
+            <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400 }}>
+              {filtered.length} entries
+            </span>
+            <span />
+            <span style={{ textAlign: "right", color: "var(--text-primary)" }}>{totalFilteredHours}h</span>
+            <span />
+          </div>
+        </div>
+      )}
+
+      {/* Empty */}
+      {!entriesLoading && filtered.length === 0 && (
+        <div style={{
+          textAlign: "center", padding: "40px 20px",
+          border: "0.5px solid var(--border-light)", borderRadius: "var(--radius-lg)",
+        }}>
+          <i className="ti ti-clock-off" style={{ fontSize: 28, color: "var(--text-secondary)", display: "block", marginBottom: 8 }} />
+          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            {activeFilterCount > 0
+              ? "No entries match your filters."
+              : "No time entries loaded yet. Import a Kantata CSV to get started."}
+          </div>
+          {activeFilterCount > 0 && (
+            <button onClick={clearFilters} style={{ ...pillBtn, marginTop: 12, color: "var(--text-secondary)" }}>
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Save bar */}
+      {isDirty && (
+        <div
+          style={{
+            position: "sticky",
+            bottom: 16,
+            marginTop: 20,
+            background: "var(--bg-primary)",
+            border: "1px solid var(--border-mid)",
+            borderRadius: 10,
+            padding: "10px 16px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
+          }}
+        >
+          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            <i className="ti ti-tag" style={{ fontSize: 14, marginRight: 6 }} />
+            {Object.keys(tagEdits).length} tag{Object.keys(tagEdits).length !== 1 ? "s" : ""} changed
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={discardChanges}
               style={{
-                fontSize: 11,
-                color: "var(--text-tertiary)",
-                whiteSpace: "nowrap",
+                fontFamily: "inherit", fontSize: 13, padding: "6px 12px",
+                borderRadius: 6, border: "1px solid var(--border-light)",
+                background: "transparent", color: "var(--text-secondary)",
+                cursor: "pointer",
               }}
             >
-              {(
-                parseFloat(hours) /
-                Math.max(1, businessDaysBetween(defaultDate, endDate))
-              ).toFixed(1)}
-              h/day
-            </span>
-          )}
+              Discard
+            </button>
+            <button
+              onClick={saveChanges}
+              disabled={saving}
+              style={{
+                fontFamily: "inherit", fontSize: 13, fontWeight: 500,
+                padding: "6px 14px", borderRadius: 6, border: "none",
+                background: "var(--text-primary)", color: "var(--bg-primary)",
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+                opacity: saving ? 0.5 : 1,
+              }}
+            >
+              <i className="ti ti-device-floppy" style={{ fontSize: 14 }} />
+              {saving ? "Saving…" : "Save tags"}
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Advanced fields toggle */}
-      <button
-        onClick={() => setShowAdvanced(!showAdvanced)}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          fontSize: 11,
-          color: "var(--text-tertiary)",
-          fontFamily: "inherit",
-          marginBottom: showAdvanced ? 8 : 0,
-        }}
-      >
-        <i
-          className={showAdvanced ? "ti ti-chevron-up" : "ti ti-chevron-down"}
-          style={{ fontSize: 12, verticalAlign: -1, marginRight: 3 }}
+      {/* Split modal */}
+      {splitEntry && (
+        <SplitEntryModal
+          entry={splitEntry}
+          existingChildren={getChildrenOf(splitEntry.id)}
+          solutions={linkedSolutions(splitEntry)}
+          onSave={handleSplitSave}
+          onUnsplit={getChildrenOf(splitEntry.id).length > 0 ? handleUnsplit : null}
+          onClose={() => setSplitEntry(null)}
         />
-        {showAdvanced ? "Less options" : "Solution link, task, ticket…"}
-      </button>
-
-      {showAdvanced && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 8,
-            marginBottom: 8,
-          }}
-        >
-          <select
-            value={solutionId}
-            onChange={(e) => setSolutionId(e.target.value)}
-            style={{ ...inputStyle, cursor: "pointer" }}
-          >
-            <option value="">No solution link</option>
-            {solutions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.customer} — {s.title}
-              </option>
-            ))}
-          </select>
-          <select
-            value={taskCategory}
-            onChange={(e) => setTaskCategory(e.target.value)}
-            style={{ ...inputStyle, cursor: "pointer" }}
-          >
-            <option value="">No category</option>
-            {["scoping", "development", "testing", "training", "deployment"].map(
-              (c) => (
-                <option key={c} value={c}>
-                  {c.charAt(0).toUpperCase() + c.slice(1)}
-                </option>
-              )
-            )}
-          </select>
-          <input
-            type="text"
-            placeholder={
-              selectedAct?.default_task
-                ? `Task (default: ${selectedAct.default_task})`
-                : "Engagement task"
-            }
-            value={engagementTask}
-            onChange={(e) => setEngagementTask(e.target.value)}
-            style={inputStyle}
-          />
-          <input
-            type="text"
-            placeholder="InvGate ticket #"
-            value={ticket}
-            onChange={(e) => setTicket(e.target.value)}
-            style={inputStyle}
-          />
-        </div>
       )}
-
-      <div
-        style={{
-          display: "flex",
-          gap: 6,
-          justifyContent: "flex-end",
-          marginTop: 8,
-        }}
-      >
-        <button
-          onClick={onCancel}
-          style={{
-            ...pillBtn,
-            padding: "5px 12px",
-            color: "var(--text-secondary)",
-          }}
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => {
-            if (!hours || !actId) return;
-            onAdd({
-              id: newEntryId(),
-              date: defaultDate,
-              end_date: isBurn && endDate ? endDate : null,
-              hours: parseFloat(hours),
-              notes,
-              activity_id: actId,
-              solution_id: solutionId || null,
-              task_category: taskCategory || null,
-              engagement_task: engagementTask || null,
-              ticket: ticket || null,
-              submitted: false,
-            });
-          }}
-          style={{
-            ...pillBtn,
-            padding: "5px 14px",
-            background: "var(--text-primary)",
-            color: "var(--bg-primary)",
-            borderColor: "var(--text-primary)",
-            fontWeight: 500,
-          }}
-        >
-          {isBurn ? "Add burn" : "Add entry"}
-        </button>
-      </div>
     </div>
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// Activity Manager
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// ActivityManager — manage Kantata activity mappings
+// ═══════════════════════════════════════════════════════════════════
 
 function ActivityManager({ activities, onSave, onBack }) {
   const [list, setList] = useState(activities);
-  const [editing, setEditing] = useState(null); // id or "new"
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
-  const [importMsg, setImportMsg] = useState("");
+  const [search, setSearch] = useState("");
 
-  const isDirty =
-    JSON.stringify(list) !== JSON.stringify(activities);
+  const isDirty = JSON.stringify(list) !== JSON.stringify(activities);
 
-  const blank = {
-    id: "",
-    label: "",
-    code: "",
-    customer: "",
-    default_task: "",
-    archived: false,
-  };
+  const filtered = list.filter((a) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (
+      a.customer?.toLowerCase().includes(q) ||
+      a.label?.toLowerCase().includes(q) ||
+      a.code?.toLowerCase().includes(q) ||
+      a.id?.toLowerCase().includes(q)
+    );
+  });
 
-  const [form, setForm] = useState(blank);
+  const active = filtered.filter((a) => !a.archived);
+  const archived = filtered.filter((a) => a.archived);
 
   function startEdit(act) {
-    setForm({ ...act });
     setEditing(act.id);
+    setForm({ ...act });
   }
 
   function startNew() {
-    setForm({ ...blank });
     setEditing("new");
+    setForm({
+      id: "",
+      code: "",
+      customer: "",
+      label: "",
+      default_task: "",
+      archived: false,
+    });
   }
 
   function saveForm() {
-    if (!form.label) return;
-    const id =
-      editing === "new"
-        ? form.label
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/(^-|-$)/g, "")
-        : form.id;
-
-    const updated = { ...form, id };
-
     if (editing === "new") {
-      setList((prev) => [...prev, updated]);
+      const id = form.id.trim().toLowerCase().replace(/\s+/g, "-");
+      if (!id) return;
+      setList((prev) => [...prev, { ...form, id }]);
     } else {
-      setList((prev) => prev.map((a) => (a.id === id ? updated : a)));
+      setList((prev) =>
+        prev.map((a) => (a.id === editing ? { ...a, ...form } : a))
+      );
     }
     setEditing(null);
   }
 
-  // ── CSV import ──────────────────────────────────────────────────
-  function handleCsvImport(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = ""; // reset for re-import
-
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const text = evt.target.result;
-      const lines = text.split("\n");
-      if (lines.length < 2) {
-        setImportMsg("CSV appears empty.");
-        return;
-      }
-
-      // Simple CSV parser that handles quoted fields with commas/quotes
-      function parseCsvLine(line) {
-        const fields = [];
-        let current = "";
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-          const ch = line[i];
-          if (inQuotes) {
-            if (ch === '"' && line[i + 1] === '"') {
-              current += '"';
-              i++;
-            } else if (ch === '"') {
-              inQuotes = false;
-            } else {
-              current += ch;
-            }
-          } else {
-            if (ch === '"') {
-              inQuotes = true;
-            } else if (ch === ",") {
-              fields.push(current.trim());
-              current = "";
-            } else {
-              current += ch;
-            }
-          }
-        }
-        fields.push(current.trim());
-        return fields;
-      }
-
-      const header = parseCsvLine(lines[0]);
-      const actIdx = header.findIndex(
-        (h) => h.toLowerCase() === "activity"
-      );
-      const acctIdx = header.findIndex(
-        (h) => h.toLowerCase() === "account"
-      );
-
-      if (actIdx === -1) {
-        setImportMsg("CSV missing 'Activity' column.");
-        return;
-      }
-
-      // Collect unique activities
-      const seen = {};
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        const fields = parseCsvLine(line);
-        const activity = fields[actIdx]?.trim();
-        const account = acctIdx >= 0 ? fields[acctIdx]?.trim() : "";
-        if (!activity || seen[activity]) continue;
-
-        // Extract E-code
-        const ecodeMatch = activity.match(/^(E\d+-\d+)/);
-        const ecode = ecodeMatch ? ecodeMatch[1] : null;
-        const slug = ecode
-          ? ecode.toLowerCase()
-          : activity
-              .toLowerCase()
-              .replace(/[^a-z0-9]+/g, "-")
-              .slice(0, 30);
-
-        // Infer label: customer short name + type
-        const custShort = account
-          .split("(")[0]
-          .replace(/,\s*$/, "")
-          .trim()
-          .slice(0, 25);
-        const actLower = activity.toLowerCase();
-        let atype = "Delivery";
-        let defaultTask = null;
-        if (
-          actLower.includes("support") ||
-          actLower.includes("optimization")
-        ) {
-          atype = "Support";
-          defaultTask = "Support & Optimization";
-        } else if (
-          actLower.includes("implementation") ||
-          actLower.includes("deployment")
-        ) {
-          atype = "Implementation";
-        } else if (actLower.includes("admin")) {
-          atype = "Admin";
-        } else if (actLower.includes("managed service")) {
-          atype = "MSP";
-          defaultTask = "Support & Optimization";
-        }
-
-        seen[activity] = {
-          id: slug,
-          label: custShort ? `${custShort} ${atype}` : activity.slice(0, 40),
-          code: activity,
-          customer: account,
-          default_task: defaultTask,
-          archived: false,
-        };
-      }
-
-      // Merge: only add activities whose code doesn't already exist
-      const existingCodes = new Set(list.map((a) => a.code));
-      const newOnes = Object.values(seen).filter(
-        (a) => !existingCodes.has(a.code)
-      );
-
-      if (newOnes.length === 0) {
-        setImportMsg(
-          `Parsed ${Object.keys(seen).length} activities — all already exist.`
-        );
-      } else {
-        setList((prev) => [...prev, ...newOnes]);
-        setImportMsg(
-          `Imported ${newOnes.length} new activities (${Object.keys(seen).length} total in CSV, ${Object.keys(seen).length - newOnes.length} already existed).`
-        );
-      }
-      setTimeout(() => setImportMsg(""), 8000);
-    };
-    reader.readAsText(file);
+  function toggleArchived(id) {
+    setList((prev) =>
+      prev.map((a) =>
+        a.id === id ? { ...a, archived: !a.archived } : a
+      )
+    );
   }
 
   async function handleSave() {
@@ -1739,358 +795,165 @@ function ActivityManager({ activities, onSave, onBack }) {
 
   return (
     <div>
-      <div
+      <button
+        onClick={onBack}
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          marginBottom: 16,
+          background: "none", border: "none", color: "var(--text-secondary)",
+          cursor: "pointer", fontSize: 13, padding: 0, marginBottom: 12,
+          display: "flex", alignItems: "center", gap: 4, fontFamily: "inherit",
         }}
       >
-        <button
-          onClick={onBack}
-          style={{
-            ...pillBtn,
-            padding: "4px 8px",
-            color: "var(--text-secondary)",
-          }}
-        >
-          <i className="ti ti-arrow-left" style={{ fontSize: 14 }} />
-        </button>
-        <span style={{ fontSize: 18, fontWeight: 500 }}>
-          Kantata Activities
-        </span>
-        <span
-          style={{
-            fontSize: 12,
-            color: "var(--text-tertiary)",
-            marginLeft: 4,
-          }}
-        >
-          {list.filter((a) => !a.archived).length} active
-        </span>
-        <button
-          onClick={startNew}
-          style={{
-            ...pillBtn,
-            marginLeft: "auto",
-            color: "var(--text-secondary)",
-          }}
-        >
-          <i className="ti ti-plus" style={{ fontSize: 13 }} />
-          Add activity
-        </button>
-        <label
-          style={{
-            ...pillBtn,
-            color: "var(--text-secondary)",
-            marginLeft: 0,
-          }}
-        >
-          <i className="ti ti-file-import" style={{ fontSize: 13 }} />
-          Import CSV
-          <input
-            type="file"
-            accept=".csv"
-            onChange={handleCsvImport}
-            style={{ display: "none" }}
-          />
-        </label>
-      </div>
+        <i className="ti ti-arrow-left" style={{ fontSize: 14 }} />
+        Back to time entries
+      </button>
 
-      {/* Import message */}
-      {importMsg && (
+      <h2 style={{ fontSize: 18, fontWeight: 500, margin: "0 0 12px" }}>
+        Activities
+      </h2>
+
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search activities…"
+        style={{ ...inputStyle, marginBottom: 14, width: "100%" }}
+      />
+
+      <button onClick={startNew} style={{ ...pillBtn, color: "var(--text-secondary)", marginBottom: 14 }}>
+        <i className="ti ti-plus" style={{ fontSize: 13 }} />
+        Add activity
+      </button>
+
+      {/* Active */}
+      {active.map((act) => (
         <div
+          key={act.id}
           style={{
-            fontSize: 12,
-            color: "#1D9E75",
-            background: "#E1F5EE",
-            padding: "8px 12px",
+            border: "0.5px solid var(--border-light)",
             borderRadius: 8,
-            marginBottom: 12,
+            padding: "10px 14px",
+            marginBottom: 6,
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 10,
           }}
         >
-          <i className="ti ti-check" style={{ fontSize: 14 }} />
-          {importMsg}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>
+              {act.customer}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+              {act.label || act.code} · {act.id}
+            </div>
+          </div>
+          <button
+            onClick={() => startEdit(act)}
+            style={{ ...pillBtn, fontSize: 11, padding: "3px 8px", color: "var(--text-secondary)" }}
+          >
+            Edit
+          </button>
+          <button
+            onClick={() => toggleArchived(act.id)}
+            style={{ ...pillBtn, fontSize: 11, padding: "3px 8px", color: "var(--text-tertiary)" }}
+          >
+            Archive
+          </button>
+        </div>
+      ))}
+
+      {/* Archived */}
+      {archived.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
+            Archived ({archived.length})
+          </div>
+          {archived.map((act) => (
+            <div
+              key={act.id}
+              style={{
+                border: "0.5px solid var(--border-light)",
+                borderRadius: 8,
+                padding: "8px 14px",
+                marginBottom: 4,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                opacity: 0.6,
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{act.customer}</div>
+                <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{act.label}</div>
+              </div>
+              <button
+                onClick={() => toggleArchived(act.id)}
+                style={{ ...pillBtn, fontSize: 11, padding: "3px 8px", color: "var(--text-secondary)" }}
+              >
+                Restore
+              </button>
+            </div>
+          ))}
         </div>
       )}
 
-      {list
-        .filter((a) => !a.archived)
-        .map((act) => (
-          <div
-            key={act.id}
-            style={{
-              ...cardBorder,
-              padding: "12px 16px",
-              marginBottom: 8,
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-            }}
-          >
-            <div
-              style={{
-                width: 4,
-                height: 32,
-                borderRadius: 2,
-                background: activityColor(list, act.id),
-                flexShrink: 0,
-              }}
-            />
-            <div style={{ flex: 1 }}>
-              <div
-                style={{
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: "var(--text-primary)",
-                }}
-              >
-                {act.label}
-              </div>
-              <div
-                style={{
-                  fontSize: 11,
-                  color: "var(--text-secondary)",
-                  marginTop: 1,
-                }}
-              >
-                {act.code}
-              </div>
-              <div
-                style={{
-                  fontSize: 10,
-                  color: "var(--text-tertiary)",
-                  marginTop: 2,
-                  display: "flex",
-                  gap: 12,
-                }}
-              >
-                <span>Customer: {act.customer || "—"}</span>
-                <span>
-                  Default task: {act.default_task || "—"}
-                </span>
-              </div>
-            </div>
-            <button
-              onClick={() => startEdit(act)}
-              style={{
-                ...pillBtn,
-                padding: "3px 8px",
-                fontSize: 11,
-                color: "var(--text-tertiary)",
-              }}
-            >
-              <i className="ti ti-pencil" style={{ fontSize: 12 }} />
-            </button>
-            <button
-              onClick={() =>
-                setList((prev) =>
-                  prev.map((a) =>
-                    a.id === act.id ? { ...a, archived: true } : a
-                  )
-                )
-              }
-              style={{
-                ...pillBtn,
-                padding: "3px 8px",
-                fontSize: 11,
-                color: "var(--text-tertiary)",
-              }}
-            >
-              <i className="ti ti-archive" style={{ fontSize: 12 }} />
-            </button>
-          </div>
-        ))}
-
-      {/* Archived */}
-      {list.filter((a) => a.archived).length > 0 && (
-        <>
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--text-tertiary)",
-              marginTop: 16,
-              marginBottom: 8,
-            }}
-          >
-            Archived
-          </div>
-          {list
-            .filter((a) => a.archived)
-            .map((act) => (
-              <div
-                key={act.id}
-                style={{
-                  ...cardBorder,
-                  padding: "10px 16px",
-                  marginBottom: 6,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  opacity: 0.5,
-                }}
-              >
-                <div style={{ flex: 1, fontSize: 13 }}>{act.label}</div>
-                <button
-                  onClick={() =>
-                    setList((prev) =>
-                      prev.map((a) =>
-                        a.id === act.id ? { ...a, archived: false } : a
-                      )
-                    )
-                  }
-                  style={{
-                    ...pillBtn,
-                    padding: "3px 8px",
-                    fontSize: 11,
-                    color: "var(--text-tertiary)",
-                  }}
-                >
-                  Restore
-                </button>
-              </div>
-            ))}
-        </>
-      )}
-
-      {/* Edit/New modal-ish form */}
+      {/* Edit form */}
       {editing && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.3)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 200,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setEditing(null);
-          }}
-        >
-          <div
-            style={{
-              background: "var(--bg-primary)",
-              borderRadius: "var(--radius-lg)",
-              padding: 24,
-              width: 420,
-              maxWidth: "90vw",
-            }}
-          >
-            <div
-              style={{
-                fontSize: 16,
-                fontWeight: 500,
-                marginBottom: 16,
-              }}
-            >
-              {editing === "new" ? "New Activity" : "Edit Activity"}
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 1000,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div onClick={() => setEditing(null)} style={{
+            position: "absolute", inset: 0, background: "rgba(0,0,0,0.3)", backdropFilter: "blur(2px)",
+          }} />
+          <div style={{
+            position: "relative",
+            background: "var(--bg-primary)",
+            border: "1px solid var(--border-light)",
+            borderRadius: "var(--radius-lg)",
+            padding: "20px 24px",
+            width: 400,
+            maxWidth: "90vw",
+            boxShadow: "0 16px 48px rgba(0,0,0,0.15)",
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 16 }}>
+              {editing === "new" ? "New activity" : "Edit activity"}
             </div>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {editing === "new" && (
+                <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                  ID (lowercase, no spaces)
+                  <input value={form.id} onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
+                    placeholder="e.g. usav-ns-ps" style={{ ...inputStyle, marginTop: 4 }} />
+                </label>
+              )}
               <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Label (short name)
-                <input
-                  type="text"
-                  value={form.label}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, label: e.target.value }))
-                  }
-                  placeholder="e.g. USAV Support"
-                  style={{ ...inputStyle, marginTop: 4 }}
-                />
+                Customer
+                <input value={form.customer} onChange={(e) => setForm((f) => ({ ...f, customer: e.target.value }))}
+                  style={{ ...inputStyle, marginTop: 4 }} />
               </label>
               <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Kantata activity code
-                <input
-                  type="text"
-                  value={form.code}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, code: e.target.value }))
-                  }
-                  placeholder="e.g. E022626-0001 NS-PPS-Support & Optimization-TM"
-                  style={{ ...inputStyle, marginTop: 4 }}
-                />
+                Label
+                <input value={form.label} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
+                  style={{ ...inputStyle, marginTop: 4 }} />
               </label>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 10,
-                }}
-              >
-                <label
-                  style={{ fontSize: 12, color: "var(--text-secondary)" }}
-                >
-                  Customer
-                  <input
-                    type="text"
-                    value={form.customer}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, customer: e.target.value }))
-                    }
-                    placeholder="e.g. USAV"
-                    style={{ ...inputStyle, marginTop: 4 }}
-                  />
-                </label>
-                <label
-                  style={{ fontSize: 12, color: "var(--text-secondary)" }}
-                >
-                  Default engagement task
-                  <input
-                    type="text"
-                    value={form.default_task}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        default_task: e.target.value,
-                      }))
-                    }
-                    placeholder="e.g. Support & Optimization"
-                    style={{ ...inputStyle, marginTop: 4 }}
-                  />
-                </label>
-              </div>
+              <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Kantata code
+                <input value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+                  style={{ ...inputStyle, marginTop: 4 }} />
+              </label>
+              <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Default engagement task
+                <input value={form.default_task} onChange={(e) => setForm((f) => ({ ...f, default_task: e.target.value }))}
+                  placeholder="e.g. Support & Optimization" style={{ ...inputStyle, marginTop: 4 }} />
+              </label>
             </div>
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                justifyContent: "flex-end",
-                marginTop: 20,
-              }}
-            >
-              <button
-                onClick={() => setEditing(null)}
-                style={{
-                  ...pillBtn,
-                  padding: "6px 14px",
-                  color: "var(--text-secondary)",
-                }}
-              >
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setEditing(null)} style={{ ...pillBtn, padding: "6px 14px", color: "var(--text-secondary)" }}>
                 Cancel
               </button>
-              <button
-                onClick={saveForm}
-                style={{
-                  ...pillBtn,
-                  padding: "6px 14px",
-                  background: "var(--text-primary)",
-                  color: "var(--bg-primary)",
-                  borderColor: "var(--text-primary)",
-                  fontWeight: 500,
-                }}
-              >
+              <button onClick={saveForm} style={{
+                ...pillBtn, padding: "6px 14px",
+                background: "var(--text-primary)", color: "var(--bg-primary)", borderColor: "var(--text-primary)", fontWeight: 500,
+              }}>
                 {editing === "new" ? "Add" : "Update"}
               </button>
             </div>
@@ -2098,219 +961,30 @@ function ActivityManager({ activities, onSave, onBack }) {
         </div>
       )}
 
-      {/* Sticky save bar */}
+      {/* Save bar */}
       {isDirty && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 0,
-            left: 0,
-            right: 0,
-            background: "var(--bg-primary)",
-            borderTop: "1px solid var(--border-mid)",
-            padding: "10px 20px",
-            display: "flex",
-            justifyContent: "center",
-            gap: 8,
-            zIndex: 100,
-          }}
-        >
-          <button
-            onClick={() => setList(activities)}
-            style={{
-              ...pillBtn,
-              padding: "6px 16px",
-              color: "var(--text-secondary)",
-            }}
-          >
-            Discard
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            style={{
-              ...pillBtn,
-              padding: "6px 16px",
-              background: "var(--text-primary)",
-              color: "var(--bg-primary)",
-              borderColor: "var(--text-primary)",
-              fontWeight: 500,
-              opacity: saving ? 0.6 : 1,
-            }}
-          >
-            {saving ? "Saving…" : "Save activities"}
-          </button>
+        <div style={{
+          position: "sticky", bottom: 16, marginTop: 20,
+          background: "var(--bg-primary)", border: "1px solid var(--border-mid)",
+          borderRadius: 10, padding: "10px 16px",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
+        }}>
+          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>Unsaved activity changes</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setList(activities)} style={{
+              fontFamily: "inherit", fontSize: 13, padding: "6px 12px", borderRadius: 6,
+              border: "1px solid var(--border-light)", background: "transparent", color: "var(--text-secondary)", cursor: "pointer",
+            }}>Discard</button>
+            <button onClick={handleSave} disabled={saving} style={{
+              fontFamily: "inherit", fontSize: 13, fontWeight: 500,
+              padding: "6px 14px", borderRadius: 6, border: "none",
+              background: "var(--text-primary)", color: "var(--bg-primary)",
+              cursor: "pointer", opacity: saving ? 0.5 : 1,
+            }}>{saving ? "Saving…" : "Save activities"}</button>
+          </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// Solution Tag — inline picker to link a time entry to a solution
-// ═════════════════════════════════════════════════════════════════════
-
-function SolutionTag({ entry, solutions, onUpdate }) {
-  const [open, setOpen] = useState(false);
-
-  // Solutions linked to this entry's activity
-  const linked = useMemo(
-    () => (solutions || []).filter((s) => s.activity_id === entry.activity_id && !s.excluded),
-    [solutions, entry.activity_id]
-  );
-
-  // Nothing to tag if no solutions linked to this engagement
-  if (linked.length === 0 && !entry.solution_id) return null;
-
-  const current = solutions?.find((s) => s.id === entry.solution_id);
-
-  // Already tagged — show solution title as pill
-  if (current && !open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        style={{
-          fontSize: 10,
-          padding: "1px 6px",
-          borderRadius: 99,
-          background: "#185FA518",
-          color: "#185FA5",
-          fontWeight: 500,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 3,
-          border: "none",
-          cursor: "pointer",
-          fontFamily: "inherit",
-        }}
-        title="Change or remove linked solution"
-      >
-        <i className="ti ti-link" style={{ fontSize: 10 }} />
-        {current.title.length > 30 ? current.title.slice(0, 28) + "…" : current.title}
-      </button>
-    );
-  }
-
-  // Not tagged but solutions available — show subtle link button
-  if (!current && !open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        style={{
-          fontSize: 10,
-          padding: "1px 6px",
-          borderRadius: 99,
-          background: "transparent",
-          color: "var(--text-tertiary)",
-          fontWeight: 500,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 3,
-          border: "1px dashed var(--border-light)",
-          cursor: "pointer",
-          fontFamily: "inherit",
-          opacity: 0.6,
-          transition: "opacity 0.15s",
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.opacity = 1; }}
-        onMouseLeave={(e) => { e.currentTarget.style.opacity = 0.6; }}
-        title="Tag to a solution"
-      >
-        <i className="ti ti-link" style={{ fontSize: 10 }} />
-        Tag solution
-      </button>
-    );
-  }
-
-  // Open picker
-  return (
-    <div style={{ position: "relative", display: "inline-block" }}>
-      <div
-        style={{
-          position: "absolute",
-          top: -4,
-          left: 0,
-          zIndex: 20,
-          background: "var(--bg-primary)",
-          border: "1px solid var(--border-mid)",
-          borderRadius: 8,
-          boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
-          minWidth: 200,
-          maxWidth: 300,
-          padding: 4,
-        }}
-      >
-        {linked.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => { onUpdate(s.id); setOpen(false); }}
-            style={{
-              display: "block",
-              width: "100%",
-              textAlign: "left",
-              padding: "6px 10px",
-              borderRadius: 6,
-              border: "none",
-              background: s.id === entry.solution_id ? "#185FA510" : "transparent",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: 12,
-              color: "var(--text-primary)",
-              fontWeight: s.id === entry.solution_id ? 500 : 400,
-            }}
-            onMouseEnter={(e) => { if (s.id !== entry.solution_id) e.currentTarget.style.background = "var(--bg-secondary)"; }}
-            onMouseLeave={(e) => { if (s.id !== entry.solution_id) e.currentTarget.style.background = "transparent"; }}
-          >
-            <div style={{ fontWeight: 500 }}>{s.title}</div>
-            <div style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 1 }}>
-              {s.customer} · {s.status}
-            </div>
-          </button>
-        ))}
-        {entry.solution_id && (
-          <button
-            onClick={() => { onUpdate(null); setOpen(false); }}
-            style={{
-              display: "block",
-              width: "100%",
-              textAlign: "left",
-              padding: "6px 10px",
-              borderRadius: 6,
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: 11,
-              color: "#E24B4A",
-              borderTop: "0.5px solid var(--border-light)",
-              marginTop: 2,
-            }}
-          >
-            <i className="ti ti-link-off" style={{ fontSize: 11, marginRight: 4 }} />
-            Remove link
-          </button>
-        )}
-        <button
-          onClick={() => setOpen(false)}
-          style={{
-            display: "block",
-            width: "100%",
-            textAlign: "left",
-            padding: "5px 10px",
-            borderRadius: 6,
-            border: "none",
-            background: "transparent",
-            cursor: "pointer",
-            fontFamily: "inherit",
-            fontSize: 10,
-            color: "var(--text-tertiary)",
-            borderTop: "0.5px solid var(--border-light)",
-            marginTop: 2,
-          }}
-        >
-          Cancel
-        </button>
-      </div>
     </div>
   );
 }
