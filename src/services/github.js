@@ -167,22 +167,26 @@ export async function saveSolution(solution) {
 }
 
 /**
- * Batch-save multiple solutions: writes each solution file in parallel,
- * then reads index.json once, patches all entries, and writes it back once.
+ * Batch-save multiple solutions: reads all SHAs in parallel,
+ * then writes each file sequentially (GitHub commits update branch HEAD,
+ * so parallel writes to the same branch 409 even on different files).
+ * Reads and writes index.json once at the end.
  */
 export async function saveSolutionsBatch(solutions) {
-  // Save individual solution files in parallel (separate paths, no SHA conflict)
-  await Promise.all(
-    solutions.map(async (solution) => {
-      const existing = await readFile(`solutions/${solution.id}.json`);
-      await writeFile(
-        `solutions/${solution.id}.json`,
-        solution,
-        existing?.sha,
-        `Update solution: ${solution.title}`
-      );
-    })
+  // Read all current SHAs in parallel (reads don't conflict)
+  const existing = await Promise.all(
+    solutions.map((s) => readFile(`solutions/${s.id}.json`))
   );
+
+  // Write solution files sequentially (each creates a commit on the branch)
+  for (let i = 0; i < solutions.length; i++) {
+    await writeFile(
+      `solutions/${solutions[i].id}.json`,
+      solutions[i],
+      existing[i]?.sha,
+      `Update solution: ${solutions[i].title}`
+    );
+  }
 
   // Read index once, patch all entries, write once
   const indexResult = await loadIndex();
