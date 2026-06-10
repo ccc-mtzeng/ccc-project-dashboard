@@ -23,6 +23,8 @@ export default function SolutionList({
   setFilterTag,
   filterStatus,
   setFilterStatus,
+  activities = [],
+  onSave,
 }) {
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
@@ -290,6 +292,7 @@ export default function SolutionList({
         {filtered.map((s) => {
           const actual = s.tasks.reduce((a, t) => a + t.actual_hours, 0);
           const sc = STATUS_CONFIG[s.status];
+          const linkedActivity = activities.find((a) => a.id === s.activity_id);
           return (
             <div
               key={s.id}
@@ -340,9 +343,50 @@ export default function SolutionList({
                     fontSize: 12,
                     color: "var(--text-secondary)",
                     marginBottom: 6,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    flexWrap: "wrap",
                   }}
                 >
                   {s.customer} · Go-live {formatDate(s.go_live_date)}
+                  <span style={{ color: "var(--border-mid)" }}>·</span>
+                  <span
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+                  >
+                    <i className="ti ti-briefcase" style={{ fontSize: 12, color: "var(--text-tertiary)" }} />
+                    <select
+                      value={s.activity_id || ""}
+                      onChange={async (e) => {
+                        e.stopPropagation();
+                        const updated = { ...s, activity_id: e.target.value || null };
+                        if (onSave) await onSave(updated);
+                      }}
+                      style={{
+                        fontFamily: "inherit",
+                        fontSize: 11,
+                        padding: "1px 4px",
+                        borderRadius: 4,
+                        border: "1px solid transparent",
+                        background: "transparent",
+                        color: s.activity_id ? "var(--text-secondary)" : "var(--text-tertiary)",
+                        cursor: "pointer",
+                        fontStyle: s.activity_id ? "normal" : "italic",
+                        maxWidth: 200,
+                        transition: "border-color 0.15s",
+                      }}
+                      onMouseOver={(e) => e.target.style.borderColor = "var(--border-mid)"}
+                      onMouseOut={(e) => e.target.style.borderColor = "transparent"}
+                    >
+                      <option value="">No engagement</option>
+                      {activities.filter((a) => !a.archived).map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.customer} — {a.label || a.code}
+                        </option>
+                      ))}
+                    </select>
+                  </span>
                 </div>
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                   {s.tags.map((t) => {

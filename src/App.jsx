@@ -389,7 +389,8 @@ export default function App() {
       {!dataLoading && view === "solutions" && solutions.length > 0 && (
         <SolutionList solutions={solutions} onSelect={handleSelect}
           filterTag={filterTag} setFilterTag={setFilterTag}
-          filterStatus={filterStatus} setFilterStatus={setFilterStatus} />
+          filterStatus={filterStatus} setFilterStatus={setFilterStatus}
+          activities={activities} onSave={handleDetailSave} />
       )}
       {!dataLoading && view === "timeline" && activeSolutions.length > 0 && (
         <Timeline solutions={activeSolutions} onSelect={handleSelect} />
