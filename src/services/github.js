@@ -43,6 +43,22 @@ function repoUrl(path) {
   return `${API_BASE}/repos/${config.owner}/${config.repo}/contents/${path}`;
 }
 
+// ─── UTF-8 safe base64 helpers ────────────────────────────────────
+// btoa/atob only handle Latin1. These handle full Unicode (em-dashes,
+// curly quotes, etc. from SharePoint/Word paste).
+
+function toBase64(str) {
+  const bytes = new TextEncoder().encode(str);
+  const binString = Array.from(bytes, (b) => String.fromCodePoint(b)).join("");
+  return btoa(binString);
+}
+
+function fromBase64(b64) {
+  const binString = atob(b64);
+  const bytes = Uint8Array.from(binString, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
 /**
  * Read a JSON file from the data repo.
  * Returns { data, sha } where sha is needed for updates.
@@ -52,7 +68,7 @@ export async function readFile(path) {
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
   const json = await res.json();
-  const content = atob(json.content.replace(/\n/g, ""));
+  const content = fromBase64(json.content.replace(/\n/g, ""));
   return {
     data: JSON.parse(content),
     sha: json.sha,
@@ -66,7 +82,7 @@ export async function readFile(path) {
 export async function writeFile(path, data, sha = null, message = "") {
   const body = {
     message: message || `Update ${path}`,
-    content: btoa(JSON.stringify(data, null, 2)),
+    content: toBase64(JSON.stringify(data, null, 2)),
   };
   if (sha) body.sha = sha;
 

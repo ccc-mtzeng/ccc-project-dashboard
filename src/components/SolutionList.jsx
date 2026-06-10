@@ -26,14 +26,18 @@ export default function SolutionList({
 }) {
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
+  const [filterCustomer, setFilterCustomer] = useState("");
   const allTaxonomyKeys = Object.keys(TAG_TAXONOMY);
   const activeTagInfo = filterTag ? TAG_TAXONOMY[filterTag] : null;
   const excludedCount = solutions.filter((s) => s.excluded).length;
+
+  const customers = [...new Set(solutions.map((s) => s.customer).filter(Boolean))].sort();
 
   const filtered = solutions.filter((s) => {
     if (!showExcluded && s.excluded) return false;
     if (filterStatus && s.status !== filterStatus) return false;
     if (filterTag && !s.tags.some((t) => t.startsWith(filterTag))) return false;
+    if (filterCustomer && s.customer !== filterCustomer) return false;
     return true;
   });
 
@@ -80,6 +84,29 @@ export default function SolutionList({
             {v.label}
           </button>
         ))}
+
+        {/* Customer filter */}
+        <select
+          value={filterCustomer}
+          onChange={(e) => setFilterCustomer(e.target.value)}
+          style={{
+            fontFamily: "inherit",
+            fontSize: 12,
+            padding: "4px 8px",
+            borderRadius: 99,
+            border: filterCustomer ? "1px solid var(--text-primary)33" : "1px solid var(--border-light)",
+            background: filterCustomer ? "var(--bg-secondary)" : "transparent",
+            color: filterCustomer ? "var(--text-primary)" : "var(--text-secondary)",
+            cursor: "pointer",
+            fontWeight: filterCustomer ? 500 : 450,
+            marginLeft: 4,
+          }}
+        >
+          <option value="">All customers</option>
+          {customers.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
 
         {/* Process area dropdown */}
         <div style={{ position: "relative", marginLeft: 4 }}>
@@ -212,9 +239,9 @@ export default function SolutionList({
           )}
         </div>
 
-        {filterTag && (
+        {(filterTag || filterCustomer) && (
           <button
-            onClick={() => setFilterTag("")}
+            onClick={() => { setFilterTag(""); setFilterCustomer(""); }}
             style={{
               background: "none",
               border: "none",
