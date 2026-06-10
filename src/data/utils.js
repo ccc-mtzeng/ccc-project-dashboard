@@ -11,6 +11,7 @@ export function formatDate(d) {
 }
 
 export function daysUntil(d) {
+  if (!d) return "No date";
   const today = new Date().toISOString().slice(0, 10);
   const diff = daysBetween(today, d);
   if (diff < 0) return `${Math.abs(diff)}d ago`;

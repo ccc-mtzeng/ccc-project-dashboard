@@ -10,9 +10,14 @@ export default function Dashboard({ solutions, onSelect }) {
     0
   );
   const activeCount = solutions.filter((s) => s.status !== "deployed").length;
-  const upcoming = [...solutions]
-    .filter((s) => s.status !== "deployed")
+
+  // Separate solutions with and without go-live dates
+  const withDate = solutions
+    .filter((s) => s.status !== "deployed" && s.go_live_date)
     .sort((a, b) => new Date(a.go_live_date) - new Date(b.go_live_date));
+  const noDate = solutions
+    .filter((s) => s.status !== "deployed" && !s.go_live_date);
+  const upcoming = [...withDate, ...noDate];
 
   const hoursByCategory = {};
   solutions.forEach((s) =>
@@ -50,8 +55,8 @@ export default function Dashboard({ solutions, onSelect }) {
         <StatCard
           icon="calendar"
           label="Next go-live"
-          value={upcoming[0] ? daysUntil(upcoming[0].go_live_date) : "—"}
-          sub={upcoming[0]?.customer}
+          value={withDate[0] ? daysUntil(withDate[0].go_live_date) : "—"}
+          sub={withDate[0]?.customer}
         />
       </div>
 
@@ -126,8 +131,10 @@ export default function Dashboard({ solutions, onSelect }) {
             Upcoming deadlines
           </div>
           {upcoming.map((s) => {
-            const du = daysUntil(s.go_live_date);
-            const isUrgent = daysBetween(todayISO(), s.go_live_date) <= 14;
+            const hasDate = !!s.go_live_date;
+            const du = hasDate ? daysUntil(s.go_live_date) : null;
+            const isUrgent = hasDate && daysBetween(todayISO(), s.go_live_date) <= 14;
+            const isOverdue = hasDate && du && du.includes("ago");
             const latestNote = (s.notes_log || [])[0];
             return (
               <div
@@ -177,12 +184,13 @@ export default function Dashboard({ solutions, onSelect }) {
                   style={{
                     fontSize: 12,
                     fontWeight: 500,
-                    color: isUrgent ? "#E24B4A" : "var(--text-secondary)",
+                    color: !hasDate ? "var(--text-tertiary)" : (isOverdue || isUrgent) ? "#E24B4A" : "var(--text-secondary)",
                     flexShrink: 0,
                     marginTop: 1,
+                    fontStyle: hasDate ? "normal" : "italic",
                   }}
                 >
-                  {du}
+                  {hasDate ? du : "No date"}
                 </span>
               </div>
             );
