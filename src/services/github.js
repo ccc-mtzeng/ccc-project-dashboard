@@ -77,11 +77,15 @@ export async function readFile(path) {
   };
 }
 
-/**
- * Write (create or update) a JSON file in the data repo.
- * Pass sha from a previous readFile to update; omit for create.
- */
-export async function writeFile(path, data, sha = null, message = "") {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** True for sha-conflict responses (409, and 422 "sha mismatch"). */
+function isConflictError(err) {
+  return /\b(409|422)\b/.test(String(err?.message || err));
+}
+
+/** Raw Contents-API PUT — no retry. Internal; use writeFile/updateJsonFile. */
+async function putFile(path, data, sha = null, message = "") {
   const body = {
     message: message || `Update ${path}`,
     content: toBase64(JSON.stringify(data, null, 2)),
@@ -96,6 +100,57 @@ export async function writeFile(path, data, sha = null, message = "") {
   if (!res.ok) throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
   const json = await res.json();
   return { sha: json.content.sha };
+}
+
+/**
+ * Write (create or update) a JSON file in the data repo.
+ * Pass sha from a previous readFile to update; omit for create.
+ *
+ * Self-heals sha conflicts once: the Contents API is eventually
+ * consistent, so a write issued right after another commit can 409
+ * even with a freshly read sha. On conflict we back off, re-read the
+ * current sha, and retry the same content (last-write-wins — fine for
+ * whole-file writes by a single user). Content that must MERGE with
+ * the current file belongs in updateJsonFile instead.
+ */
+export async function writeFile(path, data, sha = null, message = "") {
+  try {
+    return await putFile(path, data, sha, message);
+  } catch (err) {
+    if (!isConflictError(err)) throw err;
+    await sleep(750);
+    const fresh = await readFile(path);
+    return await putFile(path, data, fresh?.sha, message);
+  }
+}
+
+/**
+ * Read-modify-write a JSON file with conflict retry — for files that
+ * get PATCHED rather than replaced (index.json, weekly timesheets,
+ * activities). On a sha conflict the mutation is re-applied to a
+ * freshly read copy, so no concurrent patch is lost.
+ *
+ * @param {string} path
+ * @param {(current: any|null) => any} mutate  receives current contents
+ *   (null if the file doesn't exist yet), returns the new contents
+ * @param {string} message  commit message
+ */
+export async function updateJsonFile(path, mutate, message, maxAttempts = 3) {
+  let lastErr;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await sleep(700 * attempt);
+    const existing = await readFile(path);
+    const next = mutate(existing ? existing.data : null);
+    try {
+      return await putFile(path, next, existing?.sha, message);
+    } catch (err) {
+      if (!isConflictError(err)) throw err;
+      lastErr = err;
+    }
+  }
+  throw new Error(
+    `Save conflict persisted after ${maxAttempts} attempts (${lastErr.message}). Please try again.`
+  );
 }
 
 /**
@@ -133,20 +188,9 @@ export async function loadSolution(id) {
 /**
  * Save a solution and update the index manifest.
  */
-export async function saveSolution(solution) {
-  // Save the full solution file
-  const existing = await readFile(`solutions/${solution.id}.json`);
-  const { sha: newSha } = await writeFile(
-    `solutions/${solution.id}.json`,
-    solution,
-    existing?.sha,
-    `Update solution: ${solution.title}`
-  );
-
-  // Update index.json
-  const indexResult = await loadIndex();
-  const index = indexResult.data;
-  const entry = {
+/** Build the lightweight index.json entry for a solution. */
+function indexEntryFor(solution) {
+  return {
     id: solution.id,
     title: solution.title,
     customer: solution.customer,
@@ -155,15 +199,37 @@ export async function saveSolution(solution) {
     total_hours: solution.total_hours,
     tags: solution.tags,
   };
+}
 
-  const idx = index.findIndex((s) => s.id === solution.id);
-  if (idx >= 0) {
-    index[idx] = entry;
-  } else {
-    index.push(entry);
+/** Upsert solutions into an index array (mutation-safe copy). */
+function patchIndex(index, solutions) {
+  const next = [...(index || [])];
+  for (const solution of solutions) {
+    const entry = indexEntryFor(solution);
+    const idx = next.findIndex((s) => s.id === solution.id);
+    if (idx >= 0) next[idx] = entry;
+    else next.push(entry);
   }
+  return next;
+}
 
-  await writeFile("index.json", index, indexResult.sha, "Update index");
+export async function saveSolution(solution) {
+  // Save the full solution file (writeFile self-heals sha conflicts)
+  const existing = await readFile(`solutions/${solution.id}.json`);
+  const { sha: newSha } = await writeFile(
+    `solutions/${solution.id}.json`,
+    solution,
+    existing?.sha,
+    `Update solution: ${solution.title}`
+  );
+
+  // Patch index.json with conflict retry — the read-modify-write loop
+  // re-applies the patch to a fresh copy if a 409 hits.
+  await updateJsonFile(
+    "index.json",
+    (index) => patchIndex(index, [solution]),
+    "Update index"
+  );
 
   return { sha: newSha };
 }
@@ -192,29 +258,12 @@ export async function saveSolutionsBatch(solutions) {
     );
   }
 
-  // Read index once, patch all entries, write once
-  const indexResult = await loadIndex();
-  const index = indexResult.data;
-
-  for (const solution of solutions) {
-    const entry = {
-      id: solution.id,
-      title: solution.title,
-      customer: solution.customer,
-      status: solution.status,
-      go_live_date: solution.go_live_date,
-      total_hours: solution.total_hours,
-      tags: solution.tags,
-    };
-    const idx = index.findIndex((s) => s.id === solution.id);
-    if (idx >= 0) {
-      index[idx] = entry;
-    } else {
-      index.push(entry);
-    }
-  }
-
-  await writeFile("index.json", index, indexResult.sha, "Update index (batch)");
+  // Patch index once, with conflict retry
+  await updateJsonFile(
+    "index.json",
+    (index) => patchIndex(index, solutions),
+    "Update index (batch)"
+  );
 }
 
 // ─── Timesheet helpers ─────────────────────────────────────────────
@@ -230,12 +279,14 @@ export async function loadActivities() {
 /**
  * Save the Kantata activities config.
  */
-export async function saveActivities(activities, sha = null) {
-  if (!sha) {
-    const existing = await readFile("config/activities.json");
-    sha = existing?.sha || null;
-  }
-  return writeFile("config/activities.json", activities, sha, "Update activities");
+export async function saveActivities(activities, _sha = null) {
+  // sha param kept for call-site compatibility but ignored — the
+  // update loop always reads fresh and retries conflicts.
+  return updateJsonFile(
+    "config/activities.json",
+    () => activities,
+    "Update activities"
+  );
 }
 
 /**
@@ -270,9 +321,11 @@ export async function deleteSolution(id) {
     );
   }
 
-  const indexResult = await loadIndex();
-  const index = indexResult.data.filter((s) => s.id !== id);
-  await writeFile("index.json", index, indexResult.sha, "Update index");
+  await updateJsonFile(
+    "index.json",
+    (index) => (index || []).filter((s) => s.id !== id),
+    "Update index"
+  );
 }
 
 // ─── Timesheet aggregation helpers ───────────────────────────────────
@@ -386,11 +439,16 @@ export async function saveEntryTags(tagEdits, entries) {
     weekChanges[wk][entryId] = solutionId;
   }
   for (const [weekKey, changes] of Object.entries(weekChanges)) {
-    const { data, sha } = await loadTimesheet(weekKey);
-    const updatedEntries = (data?.entries || []).map((e) =>
-      e.id in changes ? { ...e, solution_id: changes[e.id] } : e
+    await updateJsonFile(
+      `timesheets/${weekKey}.json`,
+      (data) => ({
+        week: weekKey,
+        entries: (data?.entries || []).map((e) =>
+          e.id in changes ? { ...e, solution_id: changes[e.id] } : e
+        ),
+      }),
+      `Update tags: ${weekKey}`
     );
-    await saveTimesheet(weekKey, { week: weekKey, entries: updatedEntries }, sha);
   }
 }
 
@@ -402,9 +460,16 @@ export async function saveEntryTags(tagEdits, entries) {
  */
 export async function saveSplitChildren(parentEntry, children) {
   const wk = isoWeekKey(parentEntry.date);
-  const { data, sha } = await loadTimesheet(wk);
-  const existing = data?.entries || [];
-  const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
-  const updated = children.length > 0 ? [...cleaned, ...children] : cleaned;
-  await saveTimesheet(wk, { week: wk, entries: updated }, sha);
+  await updateJsonFile(
+    `timesheets/${wk}.json`,
+    (data) => {
+      const existing = data?.entries || [];
+      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
+      return {
+        week: wk,
+        entries: children.length > 0 ? [...cleaned, ...children] : cleaned,
+      };
+    },
+    `Update splits: ${wk}`
+  );
 }
