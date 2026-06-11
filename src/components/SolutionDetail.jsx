@@ -5,7 +5,8 @@ import StatCard from "./shared/StatCard";
 import SaveBar from "./shared/SaveBar";
 import { getSplitParentIds, round1 } from "../data/entries";
 import { saveEntryTags } from "../services/github";
-import { STATUS_CONFIG, TASK_STATUS, CATEGORY_COLORS } from "../data/constants";
+import { useAppData } from "../context/AppDataContext";
+import { STATUS_CONFIG, STATUS_ORDER, TASK_STATUS, CATEGORY_COLORS } from "../data/constants";
 import { getTagInfo } from "../data/taxonomy";
 import { daysUntil, newNoteId, relativeTime } from "../data/utils";
 
@@ -47,7 +48,15 @@ const sectionBoxStyle = {
   padding: 16,
 };
 
-export default function SolutionDetail({ solution, onBack, onSave, username, activities = [], allEntries = [], entriesLoading = false, onRefreshEntries }) {
+export default function SolutionDetail({ solution, onBack }) {
+  const {
+    username,
+    activities,
+    allEntries,
+    entriesLoading,
+    refreshEntries: onRefreshEntries,
+    saveSolution: onSave,
+  } = useAppData();
   const [draft, setDraft] = useState(structuredClone(solution));
   const [showExcludeForm, setShowExcludeForm] = useState(false);
   const [excludeNote, setExcludeNote] = useState(solution.excluded_note || "");
@@ -870,8 +879,8 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
             borderRadius: 99,
           }}
         >
-          {Object.entries(STATUS_CONFIG).map(([k, v]) => (
-            <option key={k} value={k}>{v.label}</option>
+          {STATUS_ORDER.map((k) => (
+            <option key={k} value={k}>{STATUS_CONFIG[k].label}</option>
           ))}
         </select>
       </div>

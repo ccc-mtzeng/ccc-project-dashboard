@@ -170,6 +170,8 @@ export async function saveSolution(solution) {
 
 /**
  * Batch-save multiple solutions: reads all SHAs in parallel,
+ * @param {import("../data/types").Solution[]} solutions
+ *
  * then writes each file sequentially (GitHub commits update branch HEAD,
  * so parallel writes to the same branch 409 even on different files).
  * Reads and writes index.json once at the end.
@@ -275,30 +277,91 @@ export async function deleteSolution(id) {
 
 // ─── Timesheet aggregation helpers ───────────────────────────────────
 
-/**
- * List all weekly timesheet file keys (e.g. ["2026-W14", "2026-W15", ...]).
- */
-export async function listTimesheets() {
-  const res = await fetch(repoUrl("timesheets"), { headers: headers() });
-  if (res.status === 404) return [];
-  if (!res.ok) throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
-  const files = await res.json();
-  return files
-    .filter((f) => f.name.endsWith(".json"))
-    .map((f) => f.name.replace(".json", ""));
+const ENTRIES_CACHE_KEY = "st_entries_cache_v1";
+
+function readEntriesCache() {
+  try {
+    const raw = localStorage.getItem(ENTRIES_CACHE_KEY);
+    return raw ? JSON.parse(raw) : { files: {} };
+  } catch {
+    return { files: {} };
+  }
+}
+
+function writeEntriesCache(cache) {
+  try {
+    localStorage.setItem(ENTRIES_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // Quota exceeded or storage unavailable — caching is best-effort.
+  }
 }
 
 /**
- * Load all timesheet files and return a flat array of all entries.
+ * List every timesheet file in the repo with its blob sha, using one
+ * recursive Git Trees call (works past the Contents API's 1000-file
+ * directory limit, and the shas drive the local cache below).
+ *
+ * @returns {Promise<Array<{path: string, sha: string}>>}
+ */
+export async function listTimesheetFiles() {
+  const res = await fetch(
+    `${API_BASE}/repos/${config.owner}/${config.repo}/git/trees/HEAD?recursive=1`,
+    { headers: headers() }
+  );
+  if (res.status === 404 || res.status === 409) return []; // empty repo
+  if (!res.ok) throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
+  const tree = await res.json();
+  return (tree.tree || [])
+    .filter(
+      (f) =>
+        f.type === "blob" &&
+        f.path.startsWith("timesheets/") &&
+        f.path.endsWith(".json")
+    )
+    .map((f) => ({ path: f.path, sha: f.sha }));
+}
+
+/**
+ * Load all timesheet entries as one flat array.
+ *
+ * Strategy: one Trees call lists every file + blob sha; files whose
+ * sha matches the localStorage cache are served locally, and only
+ * changed/new files are fetched. Cold start = 1 + N requests; warm
+ * start with no changes = 1 request total.
+ *
+ * @returns {Promise<Array<Object>>} flat array of time entries
  */
 export async function loadAllEntries() {
-  const weeks = await listTimesheets();
+  const files = await listTimesheetFiles();
+  const cache = readEntriesCache();
+  const nextCache = { files: {} };
+  const allEntries = [];
+
+  // Fetch only files whose blob sha changed (reads can run in parallel)
   const results = await Promise.all(
-    weeks.map((wk) =>
-      loadTimesheet(wk).catch(() => ({ data: { entries: [] } }))
-    )
+    files.map(async ({ path, sha }) => {
+      const cached = cache.files[path];
+      if (cached && cached.sha === sha) {
+        return { path, sha, entries: cached.entries };
+      }
+      try {
+        const result = await readFile(path);
+        return { path, sha, entries: result?.data?.entries || [] };
+      } catch {
+        return { path, sha, entries: [] };
+      }
+    })
   );
-  return results.flatMap((r) => r.data?.entries || []);
+
+  for (const { path, sha, entries } of results) {
+    nextCache.files[path] = { sha, entries };
+    allEntries.push(...entries);
+  }
+
+  // Deleted files fall out of the cache naturally (nextCache only
+  // contains paths present in the current tree).
+  writeEntriesCache(nextCache);
+  return allEntries;
 }
 
 // ─── Entry tagging & splitting (shared by all views) ─────────────────
@@ -306,9 +369,9 @@ export async function loadAllEntries() {
 /**
  * Persist solution-tag changes to time entries.
  *
- * tagEdits: { [entryId]: solutionId | null }
- * entries:  array containing at least the edited entries (used to map
- *           entry id -> date -> week file).
+ * @param {Object<string, string|null>} tagEdits  { entryId: solutionId | null }
+ * @param {import("../data/types").Entry[]} entries  must contain the edited
+ *   entries (used to map entry id -> date -> week file).
  *
  * Groups edits by ISO week and does a sequential read-modify-write per
  * affected week file (parallel writes 409 on branch HEAD).
@@ -334,6 +397,8 @@ export async function saveEntryTags(tagEdits, entries) {
 /**
  * Replace the split children of a parent entry within its week file.
  * Pass children = [] to unsplit (remove all children).
+ * @param {import("../data/types").Entry} parentEntry
+ * @param {import("../data/types").Entry[]} children
  */
 export async function saveSplitChildren(parentEntry, children) {
   const wk = isoWeekKey(parentEntry.date);

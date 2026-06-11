@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Login from "./components/Login";
+import ErrorBoundary from "./components/shared/ErrorBoundary";
 import Dashboard from "./components/Dashboard";
 import SolutionList from "./components/SolutionList";
 import SolutionDetail from "./components/SolutionDetail";
@@ -8,8 +9,10 @@ import ImportHub from "./components/ImportHub";
 import Timesheet from "./components/Timesheet";
 import Engagements from "./components/Engagements";
 import { NAV_ITEMS, normalizeStatus } from "./data/constants";
-import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
+import { DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
+import { AppDataProvider } from "./context/AppDataContext";
+import { actualHoursBySolution } from "./data/entries";
 import { configure, isConfigured, loadIndex, loadSolution, saveSolution, saveSolutionsBatch, loadActivities, saveActivities, loadAllEntries } from "./services/github";
 
 const pillStyle = {
@@ -158,6 +161,9 @@ export default function App() {
     }
   }, []);
 
+  // Single shared memo: solution_id -> actual hours from tagged entries.
+  const actualsMap = useMemo(() => actualHoursBySolution(allEntries), [allEntries]);
+
   // Load all entries once after auth — actual hours everywhere derive
   // from tagged entries, so the dashboard needs them too.
   useEffect(() => {
@@ -207,7 +213,25 @@ export default function App() {
     await fetchSolutions();
   }
 
+  // Everything views need, in one place (see AppDataContext for shape).
+  const appData = {
+    username: auth?.username,
+    solutions,
+    activeSolutions,
+    activities,
+    allEntries,
+    entriesLoading: allEntriesLoading,
+    actualsMap,
+    refreshEntries: fetchAllEntries,
+    refreshSolutions: fetchSolutions,
+    refreshActivities: handleRefresh,
+    saveSolution: handleDetailSave,
+    batchSaveSolutions: handleBatchSave,
+    saveActivities: handleActivitiesSave,
+  };
+
   return (
+    <AppDataProvider value={appData}>
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 20px 60px" }}>
       {/* Nav header */}
       <div
@@ -348,8 +372,9 @@ export default function App() {
       )}
 
       {/* Views — Dashboard and Timeline use activeSolutions (excludes excluded) */}
+      <ErrorBoundary resetKey={view + (selectedId || "")}>
       {!dataLoading && view === "dashboard" && activeSolutions.length > 0 && (
-        <Dashboard solutions={activeSolutions} allEntries={allEntries} onSelect={handleSelect} />
+        <Dashboard onSelect={handleSelect} />
       )}
       {/* Show empty dashboard message if all solutions are excluded */}
       {!dataLoading && view === "dashboard" && solutions.length > 0 && activeSolutions.length === 0 && (
@@ -358,34 +383,21 @@ export default function App() {
         </div>
       )}
       {!dataLoading && view === "solutions" && solutions.length > 0 && (
-        <SolutionList solutions={solutions} onSelect={handleSelect}
+        <SolutionList onSelect={handleSelect}
           filterTag={filterTag} setFilterTag={setFilterTag}
-          filterStatus={filterStatus} setFilterStatus={setFilterStatus}
-          activities={activities} allEntries={allEntries}
-          onBatchSave={handleBatchSave} />
+          filterStatus={filterStatus} setFilterStatus={setFilterStatus} />
       )}
       {!dataLoading && view === "timeline" && activeSolutions.length > 0 && (
         <Timeline solutions={activeSolutions} onSelect={handleSelect} />
       )}
       {view === "engagements" && (
-        <Engagements
-          activities={activities}
-          solutions={solutions}
-          allEntries={allEntries}
-          entriesLoading={allEntriesLoading}
-          onRefreshEntries={fetchAllEntries}
-          onBatchSave={handleBatchSave}
-          onSaveActivities={handleActivitiesSave}
-        />
+        <Engagements />
       )}
       {view === "detail" && selected && (
-        <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} username={auth?.username} activities={activities} allEntries={allEntries} entriesLoading={allEntriesLoading} onRefreshEntries={fetchAllEntries} />
+        <SolutionDetail solution={selected} onBack={() => setView("solutions")} />
       )}
       {view === "upload" && (
         <ImportHub
-          workerUrl={AUTH_CONFIG.workerUrl}
-          solutions={solutions}
-          activities={activities}
           onSolutionSaved={handleSolutionSaved}
           onEntriesImported={() => {
             fetchAllEntries();
@@ -395,15 +407,10 @@ export default function App() {
         />
       )}
       {view === "timesheet" && (
-        <Timesheet
-          activities={activities}
-          solutions={solutions}
-          allEntries={allEntries}
-          entriesLoading={allEntriesLoading}
-          onRefreshEntries={fetchAllEntries}
-          onOpenImport={() => setView("upload")}
-        />
+        <Timesheet onOpenImport={() => setView("upload")} />
       )}
+      </ErrorBoundary>
     </div>
+    </AppDataProvider>
   );
 }

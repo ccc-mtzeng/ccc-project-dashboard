@@ -14,6 +14,8 @@
  *        wrangler secret put GITHUB_CLIENT_ID
  *        wrangler secret put GITHUB_CLIENT_SECRET
  *        wrangler secret put ALLOWED_ORIGIN   (e.g. https://ccc-mtzeng.github.io)
+ *        wrangler secret put ALLOWED_USERS    (comma-separated GitHub usernames,
+ *          e.g. "ccc-mtzeng" — enforced server-side before token release)
  *        wrangler secret put GITHUB_MODELS_PAT
  *          (fine-grained PAT with "Models: Read" permission)
  *   4. wrangler deploy
@@ -137,8 +139,46 @@ async function handleAuthToken(request, env) {
       );
     }
 
+    // ── Server-side allowlist enforcement ──
+    // Fetch the user's identity with the newly issued token and verify
+    // it against ALLOWED_USERS before the token ever reaches the client.
+    // (The client-side check in src/services/auth.js is UX only.)
+    const userRes = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "solution-tracker-worker",
+      },
+    });
+
+    if (!userRes.ok) {
+      return jsonResponse(
+        { error: "Failed to verify user identity" },
+        502,
+        env.ALLOWED_ORIGIN
+      );
+    }
+
+    const user = await userRes.json();
+    const allowed = (env.ALLOWED_USERS || "")
+      .split(",")
+      .map((u) => u.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (allowed.length > 0 && !allowed.includes(user.login.toLowerCase())) {
+      return jsonResponse(
+        { error: `User ${user.login} is not authorized to access this dashboard.` },
+        403,
+        env.ALLOWED_ORIGIN
+      );
+    }
+
     return jsonResponse(
-      { access_token: tokenData.access_token },
+      {
+        access_token: tokenData.access_token,
+        username: user.login,
+        avatar: user.avatar_url,
+      },
       200,
       env.ALLOWED_ORIGIN
     );

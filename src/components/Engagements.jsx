@@ -7,6 +7,7 @@ import SplitEntryModal from "./SplitEntryModal";
 import ActivityManager from "./ActivityManager";
 import { getSplitParentIds, round1 } from "../data/entries";
 import { saveEntryTags, saveSplitChildren } from "../services/github";
+import { useAppData } from "../context/AppDataContext";
 
 // ═════════════════════════════════════════════════════════════════════
 // Engagements — the connection hub.
@@ -26,15 +27,16 @@ const pillBtn = {
   fontWeight: 500,
 };
 
-export default function Engagements({
-  activities,
-  solutions,
-  allEntries,
-  entriesLoading,
-  onRefreshEntries,
-  onBatchSave,
-  onSaveActivities,
-}) {
+export default function Engagements() {
+  const {
+    activities,
+    solutions,
+    allEntries,
+    entriesLoading,
+    refreshEntries: onRefreshEntries,
+    batchSaveSolutions: onBatchSave,
+    saveActivities: onSaveActivities,
+  } = useAppData();
   const [selectedId, setSelectedId] = useState(null);
   const [showManager, setShowManager] = useState(false);
 

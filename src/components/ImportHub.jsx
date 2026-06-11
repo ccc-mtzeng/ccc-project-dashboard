@@ -1,6 +1,8 @@
 import { useState } from "react";
 import SolutionUpload from "./SolutionUpload";
 import TimeEntryImport from "./TimeEntryImport";
+import { AUTH_CONFIG } from "../data/config";
+import { useAppData } from "../context/AppDataContext";
 
 // ─── Import hub ─────────────────────────────────────────────────────
 // Single landing page for everything that brings data into the
@@ -20,13 +22,12 @@ const cardStyle = {
 };
 
 export default function ImportHub({
-  workerUrl,
-  solutions,
-  activities,
   onSolutionSaved,
   onEntriesImported,
   initialMode = null,
 }) {
+  const { solutions, activities } = useAppData();
+  const workerUrl = AUTH_CONFIG.workerUrl;
   const [mode, setMode] = useState(initialMode); // null | "design" | "csv"
 
   if (mode === "design") {

@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { TAG_TAXONOMY } from "../data/taxonomy";
-import { STATUS_CONFIG, CATEGORY_COLORS, normalizeStatus } from "../data/constants";
+import { STATUS_CONFIG, STATUS_ORDER, CATEGORY_COLORS, normalizeStatus } from "../data/constants";
 import { slugify, todayISO } from "../data/utils";
 import { saveSolution } from "../services/github";
 
@@ -682,9 +682,9 @@ function ReviewForm({ solution, setSolution, onSave, onCancel, filename }) {
               value={solution.status}
               onChange={(e) => update("status", e.target.value)}
             >
-              {Object.entries(STATUS_CONFIG).map(([k, v]) => (
+              {STATUS_ORDER.map((k) => (
                 <option key={k} value={k}>
-                  {v.label}
+                  {STATUS_CONFIG[k].label}
                 </option>
               ))}
             </select>

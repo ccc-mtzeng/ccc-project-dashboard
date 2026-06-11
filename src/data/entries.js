@@ -12,6 +12,8 @@ export function round1(n) {
 /**
  * IDs of entries that have been split (i.e. have children).
  * Split parents are hidden everywhere; their children represent them.
+ * @param {import("./types").Entry[]} allEntries
+ * @returns {Set<string>}
  */
 export function getSplitParentIds(allEntries) {
   const ids = new Set();
@@ -24,6 +26,8 @@ export function getSplitParentIds(allEntries) {
 /**
  * Entries that should be displayed and summed: everything except
  * split parents.
+ * @param {import("./types").Entry[]} allEntries
+ * @returns {import("./types").Entry[]}
  */
 export function getVisibleEntries(allEntries) {
   const splitIds = getSplitParentIds(allEntries);
@@ -32,6 +36,8 @@ export function getVisibleEntries(allEntries) {
 
 /**
  * Map of solution_id -> actual hours, from visible tagged entries.
+ * @param {import("./types").Entry[]} allEntries
+ * @returns {Map<string, number>}
  */
 export function actualHoursBySolution(allEntries) {
   const map = new Map();

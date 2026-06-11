@@ -24,6 +24,15 @@ export const STATUS_CONFIG = {
   "7":   { label: "7. Internal",              color: "#7C5CBF", bg: "#F0EBFA" },
 };
 
+// Explicit display order. JS objects iterate integer-like keys ("3",
+// "4"…) before string keys ("1.1"…), so never rely on Object.entries
+// ordering for STATUS_CONFIG — map over this instead.
+export const STATUS_ORDER = [
+  "1.1", "1.2", "1.3", "1.4", "1.5", "1.6",
+  "2.1", "2.2", "2.3", "2.4", "2.5",
+  "3", "4", "5", "6", "7",
+];
+
 // Phase groups — used for list filtering so the filter bar stays
 // compact instead of showing 16 pills.
 export const STATUS_PHASES = {

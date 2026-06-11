@@ -17,6 +17,9 @@ export const AUTH_CONFIG = {
 
   // GitHub usernames allowed to access the dashboard (lowercase).
   // Empty array = allow anyone who authenticates.
+  // UX-only fast-fail. Real enforcement is the Worker's ALLOWED_USERS
+  // secret (checked server-side before the token is ever released) plus
+  // the data repo's own permissions.
   allowedUsers: ["ccc-mtzeng"],
 };
 

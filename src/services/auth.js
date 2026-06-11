@@ -73,32 +73,39 @@ export async function handleOAuthCallback(code) {
 
   const token = tokenData.access_token;
 
-  // Fetch the authenticated user's profile
-  const userRes = await fetch("https://api.github.com/user", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-    },
-  });
+  // The Worker verifies the allowlist server-side and returns the
+  // verified identity. Fall back to fetching the profile directly if
+  // an older Worker deployment doesn't include it.
+  let username = tokenData.username;
+  let avatar = tokenData.avatar;
 
-  if (!userRes.ok) {
-    throw new Error("Failed to fetch user profile");
+  if (!username) {
+    const userRes = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!userRes.ok) {
+      throw new Error("Failed to fetch user profile");
+    }
+    const user = await userRes.json();
+    username = user.login;
+    avatar = user.avatar_url;
   }
 
-  const user = await userRes.json();
-
-  // Check if user is in the allowed list
+  // Client-side check is UX only — real enforcement lives in the Worker.
   if (
     AUTH_CONFIG.allowedUsers.length > 0 &&
-    !AUTH_CONFIG.allowedUsers.includes(user.login.toLowerCase())
+    !AUTH_CONFIG.allowedUsers.includes(username.toLowerCase())
   ) {
-    throw new Error(`User ${user.login} is not authorized to access this dashboard.`);
+    throw new Error(`User ${username} is not authorized to access this dashboard.`);
   }
 
   const auth = {
     token,
-    username: user.login,
-    avatar: user.avatar_url,
+    username,
+    avatar,
   };
 
   storeAuth(auth);

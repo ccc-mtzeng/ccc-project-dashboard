@@ -5,6 +5,7 @@ import SaveBar from "./shared/SaveBar";
 import SplitEntryModal from "./SplitEntryModal";
 import { getSplitParentIds, round1 } from "../data/entries";
 import { saveEntryTags, saveSplitChildren } from "../services/github";
+import { useAppData } from "../context/AppDataContext";
 
 // ── Shared styles ─────────────────────────────────────────────────
 
@@ -47,14 +48,14 @@ const selectStyle = {
 // Time Entries hub — flat filterable list with tagging and splitting
 // ═══════════════════════════════════════════════════════════════════
 
-export default function Timesheet({
-  activities,
-  solutions,
-  allEntries,
-  entriesLoading,
-  onRefreshEntries,
-  onOpenImport,
-}) {
+export default function Timesheet({ onOpenImport }) {
+  const {
+    activities,
+    solutions,
+    allEntries,
+    entriesLoading,
+    refreshEntries: onRefreshEntries,
+  } = useAppData();
   // ── Filters ──
   const [filterEngagement, setFilterEngagement] = useState("");
   const [filterSolution, setFilterSolution] = useState("");

@@ -1,7 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import Badge from "./shared/Badge";
 import SaveBar from "./shared/SaveBar";
-import { actualHoursBySolution } from "../data/entries";
+import { useAppData } from "../context/AppDataContext";
+import { customerOf as deriveCustomer } from "../data/derive";
 import { STATUS_CONFIG, STATUS_PHASES, phaseOf } from "../data/constants";
 import { TAG_TAXONOMY, getTagInfo } from "../data/taxonomy";
 import { formatDate } from "../data/utils";
@@ -19,16 +20,13 @@ const pillStyle = {
 };
 
 export default function SolutionList({
-  solutions,
   onSelect,
   filterTag,
   setFilterTag,
   filterStatus,
   setFilterStatus,
-  activities = [],
-  allEntries = [],
-  onBatchSave,
 }) {
+  const { solutions, activities, actualsMap, batchSaveSolutions } = useAppData();
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
   const [filterCustomer, setFilterCustomer] = useState("");
@@ -39,15 +37,9 @@ export default function SolutionList({
   const excludedCount = solutions.filter((s) => s.excluded).length;
   const isDirty = Object.keys(engagementEdits).length > 0;
 
-  // Actual hours per solution from tagged time entries (single source of truth)
-  const actualsMap = useMemo(() => actualHoursBySolution(allEntries), [allEntries]);
-
-  // Customer authority: the linked engagement's customer (Kantata is billing
-  // truth); the solution's own customer string is display fallback only.
-  function customerOf(sol) {
-    const act = activities.find((a) => a.id === sol.activity_id);
-    return act?.customer || sol.customer;
-  }
+  // Customer authority lives in derive.js (engagement wins, solution
+  // string is fallback).
+  const customerOf = (sol) => deriveCustomer(sol, activities);
 
   const customers = [...new Set(solutions.map((s) => customerOf(s)).filter(Boolean))].sort();
 
@@ -69,14 +61,14 @@ export default function SolutionList({
   }
 
   async function saveChanges() {
-    if (!onBatchSave) return;
+    if (!batchSaveSolutions) return;
     setSaving(true);
     try {
       const updates = Object.entries(engagementEdits).map(([solId, activityId]) => {
         const sol = solutions.find((s) => s.id === solId);
         return { ...sol, activity_id: activityId };
       }).filter(Boolean);
-      await onBatchSave(updates);
+      await batchSaveSolutions(updates);
       setEngagementEdits({});
     } catch (err) {
       console.error("Failed to save engagements:", err);
