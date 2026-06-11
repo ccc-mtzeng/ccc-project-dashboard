@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { TAG_TAXONOMY } from "../data/taxonomy";
-import { STATUS_CONFIG, CATEGORY_COLORS } from "../data/constants";
+import { STATUS_CONFIG, CATEGORY_COLORS, normalizeStatus } from "../data/constants";
 import { slugify, todayISO } from "../data/utils";
 import { saveSolution } from "../services/github";
 
@@ -148,6 +148,7 @@ export default function SolutionUpload({ onSaved, workerUrl, solutions: existing
       const sol = data.solution;
       sol.id = sol.id || slugify(`${sol.customer}-${sol.title}`);
       sol.date_created = sol.date_created || todayISO();
+      sol.status = normalizeStatus(sol.status || "1.1");
 
       // Check for existing solution with same slug
       const existing = existingSolutions.find((s) => s.id === sol.id);
@@ -373,7 +374,7 @@ function MatchPrompt({ parsed, existing, onUpdate, onCreate, onCancel }) {
       </div>
       <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16, lineHeight: 1.6 }}>
         <strong style={{ color: "var(--text-primary)" }}>{parsed.customer} — {parsed.title}</strong> matches
-        an existing solution (v{existing.version}, {existing.status.replace("_", " ")}, {actual}/{existing.total_hours}h logged).
+        an existing solution (v{existing.version}, {(STATUS_CONFIG[normalizeStatus(existing.status)] || {}).label || existing.status}, {actual}/{existing.total_hours}h logged).
       </div>
 
       <div style={{ display: "flex", gap: 10 }}>

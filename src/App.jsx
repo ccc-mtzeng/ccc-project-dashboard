@@ -7,7 +7,7 @@ import Timeline from "./components/Timeline";
 import ImportHub from "./components/ImportHub";
 import Timesheet from "./components/Timesheet";
 import Engagements from "./components/Engagements";
-import { NAV_ITEMS } from "./data/constants";
+import { NAV_ITEMS, normalizeStatus } from "./data/constants";
 import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
 import { configure, isConfigured, loadIndex, loadSolution, saveSolution, saveSolutionsBatch, loadActivities, saveActivities, loadAllEntries } from "./services/github";
@@ -99,7 +99,7 @@ export default function App() {
 
       const loaded = results
         .filter((r) => r !== null)
-        .map((r) => r.data);
+        .map((r) => ({ ...r.data, status: normalizeStatus(r.data.status) }));
 
       setSolutions(loaded);
     } catch (err) {

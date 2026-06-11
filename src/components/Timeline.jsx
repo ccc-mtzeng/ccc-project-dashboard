@@ -1,5 +1,5 @@
-import { useState, useMemo, useRef, useEffect } from "react";
-import { STATUS_CONFIG } from "../data/constants";
+import { useState, useMemo, useRef } from "react";
+import { STATUS_CONFIG, isClosedStatus } from "../data/constants";
 import { daysBetween, todayISO } from "../data/utils";
 
 // ── Preset view configs ────────────────────────────────────────────
@@ -335,7 +335,7 @@ export default function Timeline({ solutions, onSelect }) {
           )}
 
           {visible.map((s) => {
-            const sc = STATUS_CONFIG[s.status] || STATUS_CONFIG.draft;
+            const sc = STATUS_CONFIG[s.status] || STATUS_CONFIG["1.1"];
             const barStart = s.date_created || s.go_live_date;
             const barEnd = s.go_live_date || s.date_created;
 
@@ -366,7 +366,7 @@ export default function Timeline({ solutions, onSelect }) {
 
             // Days until go-live
             const daysToGoLive = daysBetween(today, barEnd);
-            const isOverdue = daysToGoLive < 0 && s.status !== "complete" && s.status !== "deployed";
+            const isOverdue = daysToGoLive < 0 && !isClosedStatus(s.status);
 
             return (
               <div

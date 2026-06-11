@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import Badge from "./shared/Badge";
 import SaveBar from "./shared/SaveBar";
 import { actualHoursBySolution } from "../data/entries";
-import { STATUS_CONFIG } from "../data/constants";
+import { STATUS_CONFIG, STATUS_PHASES, phaseOf } from "../data/constants";
 import { TAG_TAXONOMY, getTagInfo } from "../data/taxonomy";
 import { formatDate } from "../data/utils";
 
@@ -91,7 +91,7 @@ export default function SolutionList({
 
   const filtered = solutions.filter((s) => {
     if (!showExcluded && s.excluded) return false;
-    if (filterStatus && s.status !== filterStatus) return false;
+    if (filterStatus && phaseOf(s.status) !== filterStatus) return false;
     if (filterTag && !s.tags.some((t) => t.startsWith(filterTag))) return false;
     if (filterCustomer && customerOf(s) !== filterCustomer) return false;
     return true;
@@ -123,14 +123,15 @@ export default function SolutionList({
         >
           All
         </button>
-        {Object.entries(STATUS_CONFIG).map(([k, v]) => (
+        {Object.entries(STATUS_PHASES).map(([k, v]) => (
           <button
             key={k}
             onClick={() => setFilterStatus(filterStatus === k ? "" : k)}
             style={{
               ...pillStyle,
-              background: filterStatus === k ? v.bg : "transparent",
-              color: filterStatus === k ? v.color : "var(--text-secondary)",
+              background: filterStatus === k ? "var(--bg-secondary)" : "transparent",
+              color: filterStatus === k ? "var(--text-primary)" : "var(--text-secondary)",
+              borderColor: filterStatus === k ? "var(--border-mid)" : "var(--border-light)",
               border:
                 filterStatus === k
                   ? `1px solid ${v.color}33`
@@ -345,7 +346,7 @@ export default function SolutionList({
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {filtered.map((s) => {
           const actual = actualsMap.get(s.id) || 0;
-          const sc = STATUS_CONFIG[s.status];
+          const sc = STATUS_CONFIG[s.status] || STATUS_CONFIG["1.1"];
           const engValue = getEngagement(s);
           const isEdited = s.id in engagementEdits;
           return (

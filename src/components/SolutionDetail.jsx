@@ -69,7 +69,7 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
   );
   const isDirty = draftDirty || claimIds.size > 0;
 
-  const sc = STATUS_CONFIG[draft.status] || STATUS_CONFIG.draft;
+  const sc = STATUS_CONFIG[draft.status] || STATUS_CONFIG["1.1"];
 
   const overallProgress = useMemo(() => {
     const tasks = draft.tasks;
@@ -143,26 +143,13 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
     setDraft((d) => ({ ...d, [field]: value }));
   }
 
-  function deriveSolutionStatus(tasks, currentStatus) {
-    if (!tasks.length || currentStatus === "on_hold") return currentStatus;
-    const allComplete = tasks.every((t) => t.status === "complete");
-    if (allComplete) return "deployed";
-    const allNotStarted = tasks.every((t) => t.status === "not_started");
-    if (allNotStarted) return "draft";
-    const incomplete = tasks.filter((t) => t.status !== "complete");
-    if (incomplete.every((t) => t.category === "testing")) return "testing";
-    return "in_progress";
-  }
-
+  // Note: solution status is now a manual workflow gate (1.1–7) and is
+  // no longer auto-derived from task completion.
   function updateTask(idx, field, value) {
     setDraft((d) => {
       const tasks = [...d.tasks];
       tasks[idx] = { ...tasks[idx], [field]: value };
-      const updates = { ...d, tasks };
-      if (field === "status") {
-        updates.status = deriveSolutionStatus(tasks, d.status);
-      }
-      return updates;
+      return { ...d, tasks };
     });
   }
 

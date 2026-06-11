@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import StatCard from "./shared/StatCard";
 import ProgressBar from "./shared/ProgressBar";
-import { CATEGORY_COLORS } from "../data/constants";
+import { CATEGORY_COLORS, isClosedStatus } from "../data/constants";
 import { daysUntil, daysBetween, todayISO, relativeTime } from "../data/utils";
 import { actualHoursBySolution, round1 } from "../data/entries";
 
@@ -14,14 +14,14 @@ export default function Dashboard({ solutions, allEntries = [], onSelect }) {
   const totalHoursActual = round1(
     solutions.reduce((s, d) => s + (actualsMap.get(d.id) || 0), 0)
   );
-  const activeCount = solutions.filter((s) => s.status !== "deployed").length;
+  const activeCount = solutions.filter((s) => !isClosedStatus(s.status)).length;
 
   // Separate solutions with and without go-live dates
   const withDate = solutions
-    .filter((s) => s.status !== "deployed" && s.go_live_date)
+    .filter((s) => !isClosedStatus(s.status) && s.go_live_date)
     .sort((a, b) => new Date(a.go_live_date) - new Date(b.go_live_date));
   const noDate = solutions
-    .filter((s) => s.status !== "deployed" && !s.go_live_date);
+    .filter((s) => !isClosedStatus(s.status) && !s.go_live_date);
   const upcoming = [...withDate, ...noDate];
 
   const hoursByCategory = {};
