@@ -1,13 +1,18 @@
+import { useMemo } from "react";
 import StatCard from "./shared/StatCard";
 import ProgressBar from "./shared/ProgressBar";
 import { CATEGORY_COLORS } from "../data/constants";
 import { daysUntil, daysBetween, todayISO, relativeTime } from "../data/utils";
+import { actualHoursBySolution, round1 } from "../data/entries";
 
-export default function Dashboard({ solutions, onSelect }) {
+export default function Dashboard({ solutions, allEntries = [], onSelect }) {
   const totalHoursEstimated = solutions.reduce((s, d) => s + d.total_hours, 0);
-  const totalHoursActual = solutions.reduce(
-    (s, d) => s + d.tasks.reduce((a, t) => a + t.actual_hours, 0),
-    0
+
+  // Actual hours = tagged time entries (single source of truth),
+  // summed across the solutions shown on this dashboard.
+  const actualsMap = useMemo(() => actualHoursBySolution(allEntries), [allEntries]);
+  const totalHoursActual = round1(
+    solutions.reduce((s, d) => s + (actualsMap.get(d.id) || 0), 0)
   );
   const activeCount = solutions.filter((s) => s.status !== "deployed").length;
 

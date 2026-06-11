@@ -1,15 +1,10 @@
 import { useState, useMemo } from "react";
 import StatCard from "./shared/StatCard";
-import ProgressBar from "./shared/ProgressBar";
+import EntryTable from "./shared/EntryTable";
+import SaveBar from "./shared/SaveBar";
 import SplitEntryModal from "./SplitEntryModal";
-import TimeEntryImport from "./TimeEntryImport";
-import { CATEGORY_COLORS } from "../data/constants";
-import { formatDate, isoWeekKey } from "../data/utils";
-import {
-  loadTimesheet,
-  saveTimesheet,
-  saveActivities,
-} from "../services/github";
+import { getSplitParentIds, round1 } from "../data/entries";
+import { saveEntryTags, saveSplitChildren } from "../services/github";
 
 // ── Shared styles ─────────────────────────────────────────────────
 
@@ -49,7 +44,7 @@ const selectStyle = {
 };
 
 // ═══════════════════════════════════════════════════════════════════
-// Main component
+// Time Entries hub — flat filterable list with tagging and splitting
 // ═══════════════════════════════════════════════════════════════════
 
 export default function Timesheet({
@@ -58,11 +53,8 @@ export default function Timesheet({
   allEntries,
   entriesLoading,
   onRefreshEntries,
-  onSaveActivities,
-  onRefresh,
+  onOpenImport,
 }) {
-  const [subView, setSubView] = useState("entries"); // "entries" | "activities" | "import"
-
   // ── Filters ──
   const [filterEngagement, setFilterEngagement] = useState("");
   const [filterSolution, setFilterSolution] = useState("");
@@ -83,13 +75,7 @@ export default function Timesheet({
 
   // ── Derived data ──
 
-  const splitParentIds = useMemo(() => {
-    const ids = new Set();
-    for (const e of allEntries) {
-      if (e.parent_id) ids.add(e.parent_id);
-    }
-    return ids;
-  }, [allEntries]);
+  const splitParentIds = useMemo(() => getSplitParentIds(allEntries), [allEntries]);
 
   // All visible entries (split parents hidden)
   const visibleEntries = useMemo(
@@ -132,18 +118,8 @@ export default function Timesheet({
     return result.sort((a, b) => b.date.localeCompare(a.date));
   }, [visibleEntries, filterEngagement, filterSolution, filterUntaggedOnly, filterSplitOnly, filterSearch, filterDateFrom, filterDateTo, tagEdits]);
 
-  // Group by date
-  const groupedByDate = useMemo(() => {
-    const map = {};
-    for (const e of filtered) {
-      if (!map[e.date]) map[e.date] = [];
-      map[e.date].push(e);
-    }
-    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [filtered]);
-
   // Stats
-  const totalFilteredHours = Math.round(filtered.reduce((s, e) => s + (e.hours || 0), 0) * 10) / 10;
+  const totalFilteredHours = round1(filtered.reduce((s, e) => s + (e.hours || 0), 0));
   const taggedCount = filtered.filter((e) => getTag(e)).length;
   const splitChildCount = filtered.filter((e) => !!e.parent_id).length;
 
@@ -195,22 +171,7 @@ export default function Timesheet({
   async function saveChanges() {
     setSaving(true);
     try {
-      const weekChanges = {};
-      for (const [entryId, solutionId] of Object.entries(tagEdits)) {
-        const entry = visibleEntries.find((e) => e.id === entryId);
-        if (!entry) continue;
-        const wk = isoWeekKey(entry.date);
-        if (!weekChanges[wk]) weekChanges[wk] = {};
-        weekChanges[wk][entryId] = solutionId;
-      }
-      for (const [weekKey, changes] of Object.entries(weekChanges)) {
-        const { data, sha } = await loadTimesheet(weekKey);
-        const updatedEntries = (data?.entries || []).map((e) => {
-          if (e.id in changes) return { ...e, solution_id: changes[e.id] };
-          return e;
-        });
-        await saveTimesheet(weekKey, { week: weekKey, entries: updatedEntries }, sha);
-      }
+      await saveEntryTags(tagEdits, visibleEntries);
       setTagEdits({});
       if (onRefreshEntries) onRefreshEntries();
     } catch (err) {
@@ -231,12 +192,7 @@ export default function Timesheet({
     setSaving(true);
     try {
       const parentEntry = allEntries.find((e) => e.id === splitEntry.id) || splitEntry;
-      const wk = isoWeekKey(parentEntry.date);
-      const { data, sha } = await loadTimesheet(wk);
-      const existing = data?.entries || [];
-      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
-      const updated = [...cleaned, ...children];
-      await saveTimesheet(wk, { week: wk, entries: updated }, sha);
+      await saveSplitChildren(parentEntry, children);
       setSplitEntry(null);
       if (onRefreshEntries) onRefreshEntries();
     } catch (err) {
@@ -251,11 +207,7 @@ export default function Timesheet({
     setSaving(true);
     try {
       const parentEntry = allEntries.find((e) => e.id === splitEntry.id) || splitEntry;
-      const wk = isoWeekKey(parentEntry.date);
-      const { data, sha } = await loadTimesheet(wk);
-      const existing = data?.entries || [];
-      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
-      await saveTimesheet(wk, { week: wk, entries: cleaned }, sha);
+      await saveSplitChildren(parentEntry, []);
       setSplitEntry(null);
       if (onRefreshEntries) onRefreshEntries();
     } catch (err) {
@@ -276,34 +228,6 @@ export default function Timesheet({
     setFilterUntaggedOnly(false);
   }
 
-  // ── Sub-views ──
-
-  if (subView === "activities") {
-    return (
-      <ActivityManager
-        activities={activities}
-        onSave={onSaveActivities}
-        onBack={() => setSubView("entries")}
-      />
-    );
-  }
-
-  if (subView === "import") {
-    return (
-      <TimeEntryImport
-        activities={activities}
-        onComplete={() => {
-          setSubView("entries");
-          if (onRefreshEntries) onRefreshEntries();
-          if (onRefresh) onRefresh();
-        }}
-        onCancel={() => setSubView("entries")}
-      />
-    );
-  }
-
-  // ── Main entries view ──
-
   // Solutions linked to a given entry's engagement
   function linkedSolutions(entry) {
     return solutionOptions.filter((s) => s.activity_id === entry.activity_id);
@@ -317,20 +241,15 @@ export default function Timesheet({
           Time Entries
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <button
-            onClick={() => setSubView("activities")}
-            style={{ ...pillBtn, color: "var(--text-secondary)" }}
-          >
-            <i className="ti ti-settings" style={{ fontSize: 13 }} />
-            Activities
-          </button>
-          <button
-            onClick={() => setSubView("import")}
-            style={{ ...pillBtn, color: "var(--text-secondary)" }}
-          >
-            <i className="ti ti-file-import" style={{ fontSize: 13 }} />
-            Import
-          </button>
+          {onOpenImport && (
+            <button
+              onClick={onOpenImport}
+              style={{ ...pillBtn, color: "var(--text-secondary)" }}
+            >
+              <i className="ti ti-table-import" style={{ fontSize: 13 }} />
+              Import CSV
+            </button>
+          )}
           {onRefreshEntries && (
             <button
               onClick={onRefreshEntries}
@@ -468,172 +387,7 @@ export default function Timesheet({
       )}
 
       {/* Entry table */}
-      {filtered.length > 0 && (
-        <div style={{
-          border: "0.5px solid var(--border-light)",
-          borderRadius: "var(--radius-lg)",
-          overflow: "hidden",
-        }}>
-          {/* Table header */}
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "82px minmax(100px, 1fr) minmax(120px, 2fr) 160px 56px 32px",
-            padding: "8px 14px",
-            background: "var(--bg-secondary)",
-            fontSize: 11, fontWeight: 500, color: "var(--text-secondary)",
-            textTransform: "uppercase", letterSpacing: "0.03em",
-          }}>
-            <span>Date</span>
-            <span>Engagement</span>
-            <span>Notes</span>
-            <span>Solution</span>
-            <span style={{ textAlign: "right" }}>Hours</span>
-            <span />
-          </div>
-
-          {/* Entry rows */}
-          {groupedByDate.map(([date, dayEntries]) =>
-            dayEntries.map((entry, idx) => {
-              const tagValue = getTag(entry);
-              const isEdited = entry.id in tagEdits;
-              const isChild = !!entry.parent_id;
-              const parentEntry = isChild ? allEntries.find((e) => e.id === entry.parent_id) : null;
-              const act = activities.find((a) => a.id === entry.activity_id);
-              const entryLinkedSolutions = linkedSolutions(entry);
-
-              return (
-                <div
-                  key={entry.id}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "82px minmax(100px, 1fr) minmax(120px, 2fr) 160px 56px 32px",
-                    padding: "7px 14px",
-                    borderTop: "0.5px solid var(--border-light)",
-                    alignItems: "center",
-                    fontSize: 13,
-                    background: isEdited ? "rgba(24,95,165,0.03)" : isChild ? "rgba(0,0,0,0.015)" : "transparent",
-                  }}
-                >
-                  {/* Date */}
-                  <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                    {idx === 0 ? formatDate(date) : ""}
-                  </span>
-
-                  {/* Engagement */}
-                  <span style={{ fontSize: 11, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {act ? act.customer : "—"}
-                  </span>
-
-                  {/* Notes */}
-                  <span style={{
-                    color: "var(--text-primary)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    paddingRight: 8,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 5,
-                  }}>
-                    {isChild && (
-                      <i className="ti ti-corner-down-right" style={{ fontSize: 12, color: "var(--text-tertiary)", flexShrink: 0 }} />
-                    )}
-                    {entry.notes || (
-                      <span style={{ color: "var(--text-tertiary)", fontStyle: "italic", fontSize: 12 }}>
-                        {entry.engagement_task || "—"}
-                      </span>
-                    )}
-                  </span>
-
-                  {/* Solution tag */}
-                  <span>
-                    {entryLinkedSolutions.length > 0 ? (
-                      <select
-                        value={tagValue || ""}
-                        onChange={(e) => setTag(entry.id, e.target.value || null)}
-                        style={{
-                          ...selectStyle,
-                          background: tagValue ? "#185FA508" : "var(--bg-primary)",
-                          color: tagValue ? "#185FA5" : "var(--text-secondary)",
-                          fontWeight: tagValue ? 500 : 400,
-                          maxWidth: 150,
-                          width: "100%",
-                        }}
-                      >
-                        <option value="">— Untagged —</option>
-                        {entryLinkedSolutions.map((s) => (
-                          <option key={s.id} value={s.id}>{s.title}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>—</span>
-                    )}
-                  </span>
-
-                  {/* Hours */}
-                  <span style={{ textAlign: "right", fontWeight: 500, color: "var(--text-primary)" }}>
-                    {entry.hours}h
-                  </span>
-
-                  {/* Split action */}
-                  <span style={{ textAlign: "center" }}>
-                    {isChild ? (
-                      <button
-                        onClick={() => parentEntry && setSplitEntry(parentEntry)}
-                        title="Edit split"
-                        style={{
-                          background: "none", border: "none", cursor: "pointer",
-                          color: "var(--text-tertiary)", fontSize: 13, padding: 2,
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-primary)"; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-tertiary)"; }}
-                      >
-                        <i className="ti ti-edit" />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setSplitEntry(entry)}
-                        title="Split entry"
-                        style={{
-                          background: "none", border: "none", cursor: "pointer",
-                          color: "var(--text-tertiary)", fontSize: 13, padding: 2,
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-primary)"; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-tertiary)"; }}
-                      >
-                        <i className="ti ti-scissors" />
-                      </button>
-                    )}
-                  </span>
-                </div>
-              );
-            })
-          )}
-
-          {/* Totals */}
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "82px minmax(100px, 1fr) minmax(120px, 2fr) 160px 56px 32px",
-            padding: "10px 14px",
-            borderTop: "1.5px solid var(--border-mid)",
-            fontSize: 13, fontWeight: 500,
-          }}>
-            <span style={{ color: "var(--text-primary)" }}>Total</span>
-            <span />
-            <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400 }}>
-              {filtered.length} entries
-            </span>
-            <span />
-            <span style={{ textAlign: "right", color: "var(--text-primary)" }}>{totalFilteredHours}h</span>
-            <span />
-          </div>
-        </div>
-      )}
-
-      {/* Empty */}
-      {!entriesLoading && filtered.length === 0 && (
+      {!entriesLoading && filtered.length === 0 ? (
         <div style={{
           textAlign: "center", padding: "40px 20px",
           border: "0.5px solid var(--border-light)", borderRadius: "var(--radius-lg)",
@@ -650,57 +404,31 @@ export default function Timesheet({
             </button>
           )}
         </div>
+      ) : filtered.length > 0 && (
+        <EntryTable
+          entries={filtered}
+          activities={activities}
+          allEntries={allEntries}
+          getTag={getTag}
+          setTag={setTag}
+          tagEdits={tagEdits}
+          linkedSolutionsFor={linkedSolutions}
+          onSplit={setSplitEntry}
+          showEngagement
+          totalHours={totalFilteredHours}
+        />
       )}
 
       {/* Save bar */}
       {isDirty && (
-        <div
-          style={{
-            position: "sticky",
-            bottom: 16,
-            marginTop: 20,
-            background: "var(--bg-primary)",
-            border: "1px solid var(--border-mid)",
-            borderRadius: 10,
-            padding: "10px 16px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
-          }}
-        >
-          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-            <i className="ti ti-tag" style={{ fontSize: 14, marginRight: 6 }} />
-            {Object.keys(tagEdits).length} tag{Object.keys(tagEdits).length !== 1 ? "s" : ""} changed
-          </span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={discardChanges}
-              style={{
-                fontFamily: "inherit", fontSize: 13, padding: "6px 12px",
-                borderRadius: 6, border: "1px solid var(--border-light)",
-                background: "transparent", color: "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-            >
-              Discard
-            </button>
-            <button
-              onClick={saveChanges}
-              disabled={saving}
-              style={{
-                fontFamily: "inherit", fontSize: 13, fontWeight: 500,
-                padding: "6px 14px", borderRadius: 6, border: "none",
-                background: "var(--text-primary)", color: "var(--bg-primary)",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-                opacity: saving ? 0.5 : 1,
-              }}
-            >
-              <i className="ti ti-device-floppy" style={{ fontSize: 14 }} />
-              {saving ? "Saving…" : "Save tags"}
-            </button>
-          </div>
-        </div>
+        <SaveBar
+          icon="ti-tag"
+          label={`${Object.keys(tagEdits).length} tag${Object.keys(tagEdits).length !== 1 ? "s" : ""} changed`}
+          saving={saving}
+          saveLabel="Save tags"
+          onDiscard={discardChanges}
+          onSave={saveChanges}
+        />
       )}
 
       {/* Split modal */}
@@ -713,277 +441,6 @@ export default function Timesheet({
           onUnsplit={getChildrenOf(splitEntry.id).length > 0 ? handleUnsplit : null}
           onClose={() => setSplitEntry(null)}
         />
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// ActivityManager — manage Kantata activity mappings
-// ═══════════════════════════════════════════════════════════════════
-
-function ActivityManager({ activities, onSave, onBack }) {
-  const [list, setList] = useState(activities);
-  const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({});
-  const [saving, setSaving] = useState(false);
-  const [search, setSearch] = useState("");
-
-  const isDirty = JSON.stringify(list) !== JSON.stringify(activities);
-
-  const filtered = list.filter((a) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      a.customer?.toLowerCase().includes(q) ||
-      a.label?.toLowerCase().includes(q) ||
-      a.code?.toLowerCase().includes(q) ||
-      a.id?.toLowerCase().includes(q)
-    );
-  });
-
-  const active = filtered.filter((a) => !a.archived);
-  const archived = filtered.filter((a) => a.archived);
-
-  function startEdit(act) {
-    setEditing(act.id);
-    setForm({ ...act });
-  }
-
-  function startNew() {
-    setEditing("new");
-    setForm({
-      id: "",
-      code: "",
-      customer: "",
-      label: "",
-      default_task: "",
-      archived: false,
-    });
-  }
-
-  function saveForm() {
-    if (editing === "new") {
-      const id = form.id.trim().toLowerCase().replace(/\s+/g, "-");
-      if (!id) return;
-      setList((prev) => [...prev, { ...form, id }]);
-    } else {
-      setList((prev) =>
-        prev.map((a) => (a.id === editing ? { ...a, ...form } : a))
-      );
-    }
-    setEditing(null);
-  }
-
-  function toggleArchived(id) {
-    setList((prev) =>
-      prev.map((a) =>
-        a.id === id ? { ...a, archived: !a.archived } : a
-      )
-    );
-  }
-
-  async function handleSave() {
-    if (!onSave) return;
-    setSaving(true);
-    try {
-      await onSave(list);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div>
-      <button
-        onClick={onBack}
-        style={{
-          background: "none", border: "none", color: "var(--text-secondary)",
-          cursor: "pointer", fontSize: 13, padding: 0, marginBottom: 12,
-          display: "flex", alignItems: "center", gap: 4, fontFamily: "inherit",
-        }}
-      >
-        <i className="ti ti-arrow-left" style={{ fontSize: 14 }} />
-        Back to time entries
-      </button>
-
-      <h2 style={{ fontSize: 18, fontWeight: 500, margin: "0 0 12px" }}>
-        Activities
-      </h2>
-
-      <input
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search activities…"
-        style={{ ...inputStyle, marginBottom: 14, width: "100%" }}
-      />
-
-      <button onClick={startNew} style={{ ...pillBtn, color: "var(--text-secondary)", marginBottom: 14 }}>
-        <i className="ti ti-plus" style={{ fontSize: 13 }} />
-        Add activity
-      </button>
-
-      {/* Active */}
-      {active.map((act) => (
-        <div
-          key={act.id}
-          style={{
-            border: "0.5px solid var(--border-light)",
-            borderRadius: 8,
-            padding: "10px 14px",
-            marginBottom: 6,
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>
-              {act.customer}
-            </div>
-            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-              {act.label || act.code} · {act.id}
-            </div>
-          </div>
-          <button
-            onClick={() => startEdit(act)}
-            style={{ ...pillBtn, fontSize: 11, padding: "3px 8px", color: "var(--text-secondary)" }}
-          >
-            Edit
-          </button>
-          <button
-            onClick={() => toggleArchived(act.id)}
-            style={{ ...pillBtn, fontSize: 11, padding: "3px 8px", color: "var(--text-tertiary)" }}
-          >
-            Archive
-          </button>
-        </div>
-      ))}
-
-      {/* Archived */}
-      {archived.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-            Archived ({archived.length})
-          </div>
-          {archived.map((act) => (
-            <div
-              key={act.id}
-              style={{
-                border: "0.5px solid var(--border-light)",
-                borderRadius: 8,
-                padding: "8px 14px",
-                marginBottom: 4,
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                opacity: 0.6,
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{act.customer}</div>
-                <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{act.label}</div>
-              </div>
-              <button
-                onClick={() => toggleArchived(act.id)}
-                style={{ ...pillBtn, fontSize: 11, padding: "3px 8px", color: "var(--text-secondary)" }}
-              >
-                Restore
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Edit form */}
-      {editing && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 1000,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          <div onClick={() => setEditing(null)} style={{
-            position: "absolute", inset: 0, background: "rgba(0,0,0,0.3)", backdropFilter: "blur(2px)",
-          }} />
-          <div style={{
-            position: "relative",
-            background: "var(--bg-primary)",
-            border: "1px solid var(--border-light)",
-            borderRadius: "var(--radius-lg)",
-            padding: "20px 24px",
-            width: 400,
-            maxWidth: "90vw",
-            boxShadow: "0 16px 48px rgba(0,0,0,0.15)",
-          }}>
-            <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 16 }}>
-              {editing === "new" ? "New activity" : "Edit activity"}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {editing === "new" && (
-                <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                  ID (lowercase, no spaces)
-                  <input value={form.id} onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
-                    placeholder="e.g. usav-ns-ps" style={{ ...inputStyle, marginTop: 4 }} />
-                </label>
-              )}
-              <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Customer
-                <input value={form.customer} onChange={(e) => setForm((f) => ({ ...f, customer: e.target.value }))}
-                  style={{ ...inputStyle, marginTop: 4 }} />
-              </label>
-              <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Label
-                <input value={form.label} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))}
-                  style={{ ...inputStyle, marginTop: 4 }} />
-              </label>
-              <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Kantata code
-                <input value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-                  style={{ ...inputStyle, marginTop: 4 }} />
-              </label>
-              <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Default engagement task
-                <input value={form.default_task} onChange={(e) => setForm((f) => ({ ...f, default_task: e.target.value }))}
-                  placeholder="e.g. Support & Optimization" style={{ ...inputStyle, marginTop: 4 }} />
-              </label>
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-              <button onClick={() => setEditing(null)} style={{ ...pillBtn, padding: "6px 14px", color: "var(--text-secondary)" }}>
-                Cancel
-              </button>
-              <button onClick={saveForm} style={{
-                ...pillBtn, padding: "6px 14px",
-                background: "var(--text-primary)", color: "var(--bg-primary)", borderColor: "var(--text-primary)", fontWeight: 500,
-              }}>
-                {editing === "new" ? "Add" : "Update"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Save bar */}
-      {isDirty && (
-        <div style={{
-          position: "sticky", bottom: 16, marginTop: 20,
-          background: "var(--bg-primary)", border: "1px solid var(--border-mid)",
-          borderRadius: 10, padding: "10px 16px",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
-        }}>
-          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>Unsaved activity changes</span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setList(activities)} style={{
-              fontFamily: "inherit", fontSize: 13, padding: "6px 12px", borderRadius: 6,
-              border: "1px solid var(--border-light)", background: "transparent", color: "var(--text-secondary)", cursor: "pointer",
-            }}>Discard</button>
-            <button onClick={handleSave} disabled={saving} style={{
-              fontFamily: "inherit", fontSize: 13, fontWeight: 500,
-              padding: "6px 14px", borderRadius: 6, border: "none",
-              background: "var(--text-primary)", color: "var(--bg-primary)",
-              cursor: "pointer", opacity: saving ? 0.5 : 1,
-            }}>{saving ? "Saving…" : "Save activities"}</button>
-          </div>
-        </div>
       )}
     </div>
   );

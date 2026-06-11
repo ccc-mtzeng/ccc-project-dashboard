@@ -1,16 +1,18 @@
 import { useState, useMemo } from "react";
 import StatCard from "./shared/StatCard";
 import ProgressBar from "./shared/ProgressBar";
+import EntryTable from "./shared/EntryTable";
+import SaveBar from "./shared/SaveBar";
 import SplitEntryModal from "./SplitEntryModal";
-import { CATEGORY_COLORS } from "../data/constants";
-import { formatDate, isoWeekKey } from "../data/utils";
-import {
-  loadTimesheet,
-  saveTimesheet,
-} from "../services/github";
+import ActivityManager from "./ActivityManager";
+import { getSplitParentIds, round1 } from "../data/entries";
+import { saveEntryTags, saveSplitChildren } from "../services/github";
 
 // ═════════════════════════════════════════════════════════════════════
-// Engagements — list of activities with hours + drill into detail
+// Engagements — the connection hub.
+// From one engagement you can: attach/detach its solutions, tag its
+// time entries to those solutions, and split entries. Engagement
+// (activity) records themselves are managed here too.
 // ═════════════════════════════════════════════════════════════════════
 
 const pillBtn = {
@@ -30,8 +32,21 @@ export default function Engagements({
   allEntries,
   entriesLoading,
   onRefreshEntries,
+  onBatchSave,
+  onSaveActivities,
 }) {
   const [selectedId, setSelectedId] = useState(null);
+  const [showManager, setShowManager] = useState(false);
+
+  if (showManager) {
+    return (
+      <ActivityManager
+        activities={activities}
+        onSave={onSaveActivities}
+        onBack={() => setShowManager(false)}
+      />
+    );
+  }
 
   if (selectedId) {
     const activity = activities.find((a) => a.id === selectedId);
@@ -47,6 +62,7 @@ export default function Engagements({
         allEntries={allEntries}
         onBack={() => setSelectedId(null)}
         onRefreshEntries={onRefreshEntries}
+        onBatchSave={onBatchSave}
       />
     );
   }
@@ -58,6 +74,7 @@ export default function Engagements({
       allEntries={allEntries}
       loading={entriesLoading}
       onSelect={setSelectedId}
+      onManage={() => setShowManager(true)}
     />
   );
 }
@@ -66,23 +83,20 @@ export default function Engagements({
 // Engagement List
 // ═════════════════════════════════════════════════════════════════════
 
-function EngagementList({ activities, solutions, allEntries, loading, onSelect }) {
+function EngagementList({ activities, solutions, allEntries, loading, onSelect, onManage }) {
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
 
   const enriched = useMemo(() => {
-    // Build set of split parent IDs globally
-    const splitIds = new Set();
-    for (const e of allEntries) {
-      if (e.parent_id) splitIds.add(e.parent_id);
-    }
+    const splitIds = getSplitParentIds(allEntries);
     return activities.map((act) => {
       const visible = allEntries.filter((e) => e.activity_id === act.id && !splitIds.has(e.id));
-      const totalHours = Math.round(visible.reduce((s, e) => s + e.hours, 0) * 10) / 10;
+      const totalHours = round1(visible.reduce((s, e) => s + e.hours, 0));
       const linkedSolutions = solutions.filter((s) => s.activity_id === act.id && !s.excluded);
       const taggedCount = visible.filter((e) => e.solution_id).length;
       const untaggedCount = visible.length - taggedCount;
-      return { ...act, entries: visible, totalHours, linkedSolutions, taggedCount, untaggedCount };
+      const untaggedHours = round1(visible.filter((e) => !e.solution_id).reduce((s, e) => s + e.hours, 0));
+      return { ...act, entries: visible, totalHours, linkedSolutions, taggedCount, untaggedCount, untaggedHours };
     });
   }, [activities, allEntries, solutions]);
 
@@ -102,19 +116,29 @@ function EngagementList({ activities, solutions, allEntries, loading, onSelect }
   // Sort: most hours first
   const sorted = [...filtered].sort((a, b) => b.totalHours - a.totalHours);
 
-  const totalHoursAll = Math.round(active.reduce((s, a) => s + a.totalHours, 0) * 10) / 10;
+  const totalHoursAll = round1(active.reduce((s, a) => s + a.totalHours, 0));
   const totalEntries = active.reduce((s, a) => s + a.entries.length, 0);
+  const untaggedHoursAll = round1(active.reduce((s, a) => s + a.untaggedHours, 0));
 
   return (
     <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 18, fontWeight: 500, color: "var(--text-primary)" }}>
+          Engagements
+        </div>
+        <button onClick={onManage} style={{ ...pillBtn, color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-settings" style={{ fontSize: 13 }} />
+          Manage activities
+        </button>
+      </div>
+
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
         <StatCard icon="briefcase" label="Engagements" value={active.length} sub={`${archived.length} archived`} />
         <StatCard icon="clock" label="Total hours" value={`${totalHoursAll}h`} sub={`${totalEntries} entries`} />
-        <StatCard
-          icon="link"
-          label="Solutions linked"
-          value={active.reduce((s, a) => s + a.linkedSolutions.length, 0)}
-        />
+        {untaggedHoursAll > 0 && (
+          <StatCard icon="tag-off" label="Untagged" value={`${untaggedHoursAll}h`} sub="not tied to a solution" />
+        )}
       </div>
 
       {/* Search */}
@@ -241,16 +265,52 @@ function EngagementList({ activities, solutions, allEntries, loading, onSelect }
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// Engagement Detail — entries + solution tagging
+// Engagement Detail — attach solutions + tag entries from one screen
 // ═════════════════════════════════════════════════════════════════════
 
-function EngagementDetail({ activity, activities, solutions, allEntries, onBack, onRefreshEntries }) {
+function EngagementDetail({ activity, activities, solutions, allEntries, onBack, onRefreshEntries, onBatchSave }) {
+  // ── Staged edits ──
+  const [tagEdits, setTagEdits] = useState({});       // { entryId: solutionId | null }
+  const [solutionEdits, setSolutionEdits] = useState({}); // { solutionId: activityId | null }
+  const [saving, setSaving] = useState(false);
+  const [splitEntry, setSplitEntry] = useState(null);
+
+  const isDirty = Object.keys(tagEdits).length > 0 || Object.keys(solutionEdits).length > 0;
+  const changeCount = Object.keys(tagEdits).length + Object.keys(solutionEdits).length;
+
+  // ── Solution linking (with staged edits applied) ──
+
+  function effectiveActivityId(sol) {
+    if (sol.id in solutionEdits) return solutionEdits[sol.id];
+    return sol.activity_id || null;
+  }
+
   const linkedSolutions = useMemo(
-    () => solutions.filter((s) => s.activity_id === activity.id && !s.excluded),
-    [solutions, activity.id]
+    () => solutions.filter((s) => effectiveActivityId(s) === activity.id && !s.excluded),
+    [solutions, activity.id, solutionEdits]
   );
 
-  // All entries for this activity (including parents and children)
+  const attachableSolutions = useMemo(
+    () =>
+      solutions
+        .filter((s) => !s.excluded && effectiveActivityId(s) !== activity.id)
+        .sort((a, b) => a.title.localeCompare(b.title)),
+    [solutions, activity.id, solutionEdits]
+  );
+
+  function stageSolutionLink(solutionId, newActivityId) {
+    const sol = solutions.find((s) => s.id === solutionId);
+    if (!sol) return;
+    const original = sol.activity_id || null;
+    if (newActivityId === original) {
+      setSolutionEdits((prev) => { const next = { ...prev }; delete next[solutionId]; return next; });
+    } else {
+      setSolutionEdits((prev) => ({ ...prev, [solutionId]: newActivityId }));
+    }
+  }
+
+  // ── Entries ──
+
   const rawEntries = useMemo(
     () =>
       allEntries
@@ -259,38 +319,20 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     [allEntries, activity.id]
   );
 
-  // IDs of entries that have been split (have children)
-  const splitParentIds = useMemo(() => {
-    const ids = new Set();
-    for (const e of allEntries) {
-      if (e.parent_id) ids.add(e.parent_id);
-    }
-    return ids;
-  }, [allEntries]);
+  const splitParentIds = useMemo(() => getSplitParentIds(allEntries), [allEntries]);
 
-  // Visible entries: hide split parents, show their children + all unsplit entries
   const entries = useMemo(
     () => rawEntries.filter((e) => !splitParentIds.has(e.id)),
     [rawEntries, splitParentIds]
   );
 
-  // Local editable copy for tagging
-  const [tagEdits, setTagEdits] = useState({}); // { entryId: solutionId | null }
-  const [saving, setSaving] = useState(false);
-  const [splitEntry, setSplitEntry] = useState(null); // entry being split
-
-  const isDirty = Object.keys(tagEdits).length > 0;
+  // ── Tagging ──
 
   function setTag(entryId, solutionId) {
     const entry = entries.find((e) => e.id === entryId);
     const original = entry?.solution_id || null;
     if (solutionId === original) {
-      // Reverted to original — remove edit
-      setTagEdits((prev) => {
-        const next = { ...prev };
-        delete next[entryId];
-        return next;
-      });
+      setTagEdits((prev) => { const next = { ...prev }; delete next[entryId]; return next; });
     } else {
       setTagEdits((prev) => ({ ...prev, [entryId]: solutionId }));
     }
@@ -301,39 +343,44 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     return entry.solution_id || null;
   }
 
+  // Taggable options: solutions linked to this engagement, plus any
+  // solution an entry is already tagged to (so existing tags always
+  // render even if the link was changed elsewhere).
+  function linkedSolutionsFor(entry) {
+    const current = getTag(entry);
+    const extra = current && !linkedSolutions.some((s) => s.id === current)
+      ? solutions.filter((s) => s.id === current)
+      : [];
+    return [...linkedSolutions, ...extra];
+  }
+
   function discardChanges() {
     setTagEdits({});
+    setSolutionEdits({});
   }
 
   async function saveChanges() {
     setSaving(true);
     try {
-      // Group changed entries by ISO week
-      const weekChanges = {};
-      for (const [entryId, solutionId] of Object.entries(tagEdits)) {
-        const entry = entries.find((e) => e.id === entryId);
-        if (!entry) continue;
-        const wk = isoWeekKey(entry.date);
-        if (!weekChanges[wk]) weekChanges[wk] = {};
-        weekChanges[wk][entryId] = solutionId;
+      // 1. Solution link changes (batch write to solutions + index)
+      const solutionUpdates = Object.entries(solutionEdits).map(([solId, activityId]) => {
+        const sol = solutions.find((s) => s.id === solId);
+        return { ...sol, activity_id: activityId };
+      }).filter((s) => s.id);
+      if (solutionUpdates.length > 0 && onBatchSave) {
+        await onBatchSave(solutionUpdates);
       }
 
-      // Save each affected week
-      for (const [weekKey, changes] of Object.entries(weekChanges)) {
-        const { data, sha } = await loadTimesheet(weekKey);
-        const updatedEntries = (data?.entries || []).map((e) => {
-          if (e.id in changes) {
-            return { ...e, solution_id: changes[e.id] };
-          }
-          return e;
-        });
-        await saveTimesheet(weekKey, { week: weekKey, entries: updatedEntries }, sha);
+      // 2. Entry tag changes (sequential write per affected week)
+      if (Object.keys(tagEdits).length > 0) {
+        await saveEntryTags(tagEdits, entries);
+        if (onRefreshEntries) onRefreshEntries();
       }
 
       setTagEdits({});
-      if (onRefreshEntries) onRefreshEntries();
+      setSolutionEdits({});
     } catch (err) {
-      console.error("Failed to save tags:", err);
+      console.error("Failed to save:", err);
       alert("Failed to save: " + err.message);
     } finally {
       setSaving(false);
@@ -350,16 +397,7 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     setSaving(true);
     try {
       const parentEntry = rawEntries.find((e) => e.id === splitEntry.id) || splitEntry;
-      const wk = isoWeekKey(parentEntry.date);
-      const { data, sha } = await loadTimesheet(wk);
-      const existing = data?.entries || [];
-
-      // Remove old children of this parent
-      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
-      // Add new children
-      const updated = [...cleaned, ...children];
-
-      await saveTimesheet(wk, { week: wk, entries: updated }, sha);
+      await saveSplitChildren(parentEntry, children);
       setSplitEntry(null);
       if (onRefreshEntries) onRefreshEntries();
     } catch (err) {
@@ -374,14 +412,7 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     setSaving(true);
     try {
       const parentEntry = rawEntries.find((e) => e.id === splitEntry.id) || splitEntry;
-      const wk = isoWeekKey(parentEntry.date);
-      const { data, sha } = await loadTimesheet(wk);
-      const existing = data?.entries || [];
-
-      // Remove all children of this parent
-      const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
-
-      await saveTimesheet(wk, { week: wk, entries: cleaned }, sha);
+      await saveSplitChildren(parentEntry, []);
       setSplitEntry(null);
       if (onRefreshEntries) onRefreshEntries();
     } catch (err) {
@@ -392,8 +423,9 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     }
   }
 
-  // Stats
-  const totalHours = Math.round(entries.reduce((s, e) => s + e.hours, 0) * 10) / 10;
+  // ── Stats ──
+
+  const totalHours = round1(entries.reduce((s, e) => s + e.hours, 0));
   const hoursBySolution = useMemo(() => {
     const map = { _untagged: 0 };
     for (const e of entries) {
@@ -406,16 +438,6 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
     }
     return map;
   }, [entries, tagEdits]);
-
-  // Group entries by date
-  const groupedByDate = useMemo(() => {
-    const map = {};
-    for (const e of entries) {
-      if (!map[e.date]) map[e.date] = [];
-      map[e.date].push(e);
-    }
-    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [entries]);
 
   return (
     <div>
@@ -452,6 +474,80 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
         )}
       </div>
 
+      {/* Solutions on this engagement — attach / detach */}
+      <div style={{
+        border: "0.5px solid var(--border-light)",
+        borderRadius: "var(--radius-lg)",
+        padding: 14,
+        marginBottom: 18,
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", marginBottom: 10 }}>
+          Solutions on this engagement
+        </div>
+
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {linkedSolutions.map((s) => {
+            const isStaged = s.id in solutionEdits;
+            return (
+              <span
+                key={s.id}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  fontSize: 11, fontWeight: 500, padding: "3px 6px 3px 10px",
+                  borderRadius: 99,
+                  background: isStaged ? "#BA75170A" : "#185FA510",
+                  color: isStaged ? "#BA7517" : "#185FA5",
+                  border: isStaged ? "1px solid #BA751766" : "1px solid transparent",
+                }}
+              >
+                {s.title}
+                <button
+                  onClick={() => stageSolutionLink(s.id, null)}
+                  title="Detach from this engagement"
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    color: "inherit", padding: 0, display: "flex", alignItems: "center",
+                    opacity: 0.7,
+                  }}
+                >
+                  <i className="ti ti-x" style={{ fontSize: 12 }} />
+                </button>
+              </span>
+            );
+          })}
+
+          {linkedSolutions.length === 0 && (
+            <span style={{ fontSize: 12, color: "var(--text-tertiary)", fontStyle: "italic" }}>
+              No solutions linked yet — attach one to start tagging time below.
+            </span>
+          )}
+
+          {/* Attach dropdown */}
+          {attachableSolutions.length > 0 && (
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) stageSolutionLink(e.target.value, activity.id); }}
+              style={{
+                fontFamily: "inherit", fontSize: 11, padding: "3px 6px",
+                borderRadius: 99, border: "1px dashed var(--border-mid)",
+                background: "transparent", color: "var(--text-secondary)",
+                cursor: "pointer", maxWidth: 220,
+              }}
+            >
+              <option value="">+ Attach solution…</option>
+              {attachableSolutions.map((s) => {
+                const act = activities.find((a) => a.id === effectiveActivityId(s));
+                return (
+                  <option key={s.id} value={s.id}>
+                    {s.title}{act ? ` (currently ${act.customer})` : ""}
+                  </option>
+                );
+              })}
+            </select>
+          )}
+        </div>
+      </div>
+
       {/* Hours by solution breakdown */}
       {linkedSolutions.length > 0 && (
         <div style={{
@@ -464,8 +560,7 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
             Hours by solution
           </div>
           {linkedSolutions.map((s) => {
-            const hrs = Math.round((hoursBySolution[s.id] || 0) * 10) / 10;
-            const pct = totalHours > 0 ? (hrs / totalHours) * 100 : 0;
+            const hrs = round1(hoursBySolution[s.id] || 0);
             return (
               <div key={s.id} style={{ marginBottom: 6 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 2 }}>
@@ -481,7 +576,7 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 2 }}>
                 <span style={{ color: "var(--text-tertiary)", fontStyle: "italic" }}>Untagged</span>
                 <span style={{ fontWeight: 500, color: "var(--text-tertiary)" }}>
-                  {Math.round(hoursBySolution._untagged * 10) / 10}h
+                  {round1(hoursBySolution._untagged)}h
                 </span>
               </div>
               <ProgressBar value={hoursBySolution._untagged} max={totalHours || 1} color="#ccc" height={4} />
@@ -490,194 +585,30 @@ function EngagementDetail({ activity, activities, solutions, allEntries, onBack,
         </div>
       )}
 
-      {/* Entries grouped by date */}
-      <div style={{
-        border: "0.5px solid var(--border-light)",
-        borderRadius: "var(--radius-lg)",
-        overflow: "hidden",
-      }}>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: linkedSolutions.length > 0 ? "90px 1fr 180px 60px 32px" : "90px 1fr 60px 32px",
-          padding: "8px 14px",
-          background: "var(--bg-secondary)",
-          fontSize: 11, fontWeight: 500, color: "var(--text-secondary)",
-          textTransform: "uppercase", letterSpacing: "0.03em",
-        }}>
-          <span>Date</span>
-          <span>Notes</span>
-          {linkedSolutions.length > 0 && <span>Solution</span>}
-          <span style={{ textAlign: "right" }}>Hours</span>
-          <span />
-        </div>
-
-        {groupedByDate.map(([date, dayEntries]) => (
-          dayEntries.map((entry, idx) => {
-            const tagValue = getTag(entry);
-            const isEdited = entry.id in tagEdits;
-            const isChild = !!entry.parent_id;
-            const isSplitParent = splitParentIds.has(entry.id);
-            // For child entries, find the parent to enable re-opening split modal
-            const parentEntry = isChild ? rawEntries.find((e) => e.id === entry.parent_id) : null;
-            return (
-              <div
-                key={entry.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: linkedSolutions.length > 0 ? "90px 1fr 180px 60px 32px" : "90px 1fr 60px 32px",
-                  padding: "8px 14px",
-                  borderTop: "0.5px solid var(--border-light)",
-                  alignItems: "center",
-                  fontSize: 13,
-                  background: isEdited ? "rgba(24,95,165,0.03)" : isChild ? "rgba(0,0,0,0.015)" : "transparent",
-                }}
-              >
-                <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                  {idx === 0 ? formatDate(date) : ""}
-                </span>
-                <span style={{
-                  color: "var(--text-primary)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  paddingRight: 8,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 5,
-                }}>
-                  {isChild && (
-                    <i
-                      className="ti ti-corner-down-right"
-                      style={{ fontSize: 12, color: "var(--text-tertiary)", flexShrink: 0 }}
-                    />
-                  )}
-                  {entry.notes || (
-                    <span style={{ color: "var(--text-tertiary)", fontStyle: "italic", fontSize: 12 }}>
-                      {entry.engagement_task || "—"}
-                    </span>
-                  )}
-                </span>
-                {linkedSolutions.length > 0 && (
-                  <span>
-                    <select
-                      value={tagValue || ""}
-                      onChange={(e) => setTag(entry.id, e.target.value || null)}
-                      style={{
-                        fontFamily: "inherit",
-                        fontSize: 11,
-                        padding: "3px 6px",
-                        borderRadius: 4,
-                        border: "1px solid var(--border-light)",
-                        background: tagValue ? "#185FA508" : "var(--bg-primary)",
-                        color: tagValue ? "#185FA5" : "var(--text-secondary)",
-                        cursor: "pointer",
-                        fontWeight: tagValue ? 500 : 400,
-                        maxWidth: 170,
-                        width: "100%",
-                      }}
-                    >
-                      <option value="">— Untagged —</option>
-                      {linkedSolutions.map((s) => (
-                        <option key={s.id} value={s.id}>{s.title}</option>
-                      ))}
-                    </select>
-                  </span>
-                )}
-                <span style={{ textAlign: "right", fontWeight: 500, color: "var(--text-primary)" }}>
-                  {entry.hours}h
-                </span>
-                <span style={{ textAlign: "center" }}>
-                  {isChild ? (
-                    <button
-                      onClick={() => parentEntry && setSplitEntry(parentEntry)}
-                      title="Edit split"
-                      style={{
-                        background: "none", border: "none", cursor: "pointer",
-                        color: "var(--text-tertiary)", fontSize: 13, padding: 2,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-primary)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-tertiary)"; }}
-                    >
-                      <i className="ti ti-edit" />
-                    </button>
-                  ) : !entry.parent_id && (
-                    <button
-                      onClick={() => setSplitEntry(entry)}
-                      title="Split entry"
-                      style={{
-                        background: "none", border: "none", cursor: "pointer",
-                        color: "var(--text-tertiary)", fontSize: 13, padding: 2,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text-primary)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-tertiary)"; }}
-                    >
-                      <i className="ti ti-scissors" />
-                    </button>
-                  )}
-                </span>
-              </div>
-            );
-          })
-        ))}
-
-        {entries.length === 0 && (
-          <div style={{ padding: "20px 14px", fontSize: 13, color: "var(--text-secondary)", textAlign: "center" }}>
-            No time entries for this engagement.
-          </div>
-        )}
-      </div>
+      {/* Entries */}
+      <EntryTable
+        entries={entries}
+        activities={activities}
+        allEntries={allEntries}
+        getTag={getTag}
+        setTag={setTag}
+        tagEdits={tagEdits}
+        linkedSolutionsFor={linkedSolutionsFor}
+        onSplit={setSplitEntry}
+        totalHours={totalHours}
+        emptyMessage="No time entries for this engagement."
+      />
 
       {/* Save bar */}
       {isDirty && (
-        <div
-          style={{
-            position: "sticky",
-            bottom: 16,
-            marginTop: 20,
-            background: "var(--bg-primary)",
-            border: "1px solid var(--border-mid)",
-            borderRadius: 10,
-            padding: "10px 16px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
-          }}
-        >
-          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-            <i className="ti ti-tag" style={{ fontSize: 14, marginRight: 6 }} />
-            {Object.keys(tagEdits).length} tag{Object.keys(tagEdits).length !== 1 ? "s" : ""} changed
-          </span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={discardChanges}
-              style={{
-                fontFamily: "inherit", fontSize: 13, padding: "6px 12px",
-                borderRadius: 6, border: "1px solid var(--border-light)",
-                background: "transparent", color: "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-            >
-              Discard
-            </button>
-            <button
-              onClick={saveChanges}
-              disabled={saving}
-              style={{
-                fontFamily: "inherit", fontSize: 13, fontWeight: 500,
-                padding: "6px 14px", borderRadius: 6, border: "none",
-                background: "var(--text-primary)", color: "var(--bg-primary)",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-                opacity: saving ? 0.5 : 1,
-              }}
-            >
-              <i className="ti ti-device-floppy" style={{ fontSize: 14 }} />
-              {saving ? "Saving…" : "Save tags"}
-            </button>
-          </div>
-        </div>
+        <SaveBar
+          icon="ti-tag"
+          label={`${changeCount} change${changeCount !== 1 ? "s" : ""}`}
+          saving={saving}
+          saveLabel="Save changes"
+          onDiscard={discardChanges}
+          onSave={saveChanges}
+        />
       )}
 
       {/* Split modal */}

@@ -15,6 +15,8 @@
  *   index.json             — lightweight manifest of all solutions
  */
 
+import { isoWeekKey } from "../data/utils";
+
 const API_BASE = "https://api.github.com";
 
 let config = {
@@ -297,4 +299,47 @@ export async function loadAllEntries() {
     )
   );
   return results.flatMap((r) => r.data?.entries || []);
+}
+
+// ─── Entry tagging & splitting (shared by all views) ─────────────────
+
+/**
+ * Persist solution-tag changes to time entries.
+ *
+ * tagEdits: { [entryId]: solutionId | null }
+ * entries:  array containing at least the edited entries (used to map
+ *           entry id -> date -> week file).
+ *
+ * Groups edits by ISO week and does a sequential read-modify-write per
+ * affected week file (parallel writes 409 on branch HEAD).
+ */
+export async function saveEntryTags(tagEdits, entries) {
+  const weekChanges = {};
+  for (const [entryId, solutionId] of Object.entries(tagEdits)) {
+    const entry = entries.find((e) => e.id === entryId);
+    if (!entry) continue;
+    const wk = isoWeekKey(entry.date);
+    if (!weekChanges[wk]) weekChanges[wk] = {};
+    weekChanges[wk][entryId] = solutionId;
+  }
+  for (const [weekKey, changes] of Object.entries(weekChanges)) {
+    const { data, sha } = await loadTimesheet(weekKey);
+    const updatedEntries = (data?.entries || []).map((e) =>
+      e.id in changes ? { ...e, solution_id: changes[e.id] } : e
+    );
+    await saveTimesheet(weekKey, { week: weekKey, entries: updatedEntries }, sha);
+  }
+}
+
+/**
+ * Replace the split children of a parent entry within its week file.
+ * Pass children = [] to unsplit (remove all children).
+ */
+export async function saveSplitChildren(parentEntry, children) {
+  const wk = isoWeekKey(parentEntry.date);
+  const { data, sha } = await loadTimesheet(wk);
+  const existing = data?.entries || [];
+  const cleaned = existing.filter((e) => e.parent_id !== parentEntry.id);
+  const updated = children.length > 0 ? [...cleaned, ...children] : cleaned;
+  await saveTimesheet(wk, { week: wk, entries: updated }, sha);
 }

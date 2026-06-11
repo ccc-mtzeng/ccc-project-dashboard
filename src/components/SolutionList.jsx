@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Badge from "./shared/Badge";
+import SaveBar from "./shared/SaveBar";
+import { actualHoursBySolution } from "../data/entries";
 import { STATUS_CONFIG } from "../data/constants";
 import { TAG_TAXONOMY, getTagInfo } from "../data/taxonomy";
 import { formatDate } from "../data/utils";
@@ -24,6 +26,7 @@ export default function SolutionList({
   filterStatus,
   setFilterStatus,
   activities = [],
+  allEntries = [],
   onBatchSave,
 }) {
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
@@ -36,7 +39,17 @@ export default function SolutionList({
   const excludedCount = solutions.filter((s) => s.excluded).length;
   const isDirty = Object.keys(engagementEdits).length > 0;
 
-  const customers = [...new Set(solutions.map((s) => s.customer).filter(Boolean))].sort();
+  // Actual hours per solution from tagged time entries (single source of truth)
+  const actualsMap = useMemo(() => actualHoursBySolution(allEntries), [allEntries]);
+
+  // Customer authority: the linked engagement's customer (Kantata is billing
+  // truth); the solution's own customer string is display fallback only.
+  function customerOf(sol) {
+    const act = activities.find((a) => a.id === sol.activity_id);
+    return act?.customer || sol.customer;
+  }
+
+  const customers = [...new Set(solutions.map((s) => customerOf(s)).filter(Boolean))].sort();
 
   function getEngagement(sol) {
     if (sol.id in engagementEdits) return engagementEdits[sol.id];
@@ -80,7 +93,7 @@ export default function SolutionList({
     if (!showExcluded && s.excluded) return false;
     if (filterStatus && s.status !== filterStatus) return false;
     if (filterTag && !s.tags.some((t) => t.startsWith(filterTag))) return false;
-    if (filterCustomer && s.customer !== filterCustomer) return false;
+    if (filterCustomer && customerOf(s) !== filterCustomer) return false;
     return true;
   });
 
@@ -331,7 +344,7 @@ export default function SolutionList({
       {/* Solution cards */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {filtered.map((s) => {
-          const actual = s.tasks.reduce((a, t) => a + t.actual_hours, 0);
+          const actual = actualsMap.get(s.id) || 0;
           const sc = STATUS_CONFIG[s.status];
           const engValue = getEngagement(s);
           const isEdited = s.id in engagementEdits;
@@ -391,7 +404,7 @@ export default function SolutionList({
                     flexWrap: "wrap",
                   }}
                 >
-                  {s.customer} · Go-live {formatDate(s.go_live_date)}
+                  {customerOf(s)} · {s.go_live_date ? `Go-live ${formatDate(s.go_live_date)}` : "No go-live date"}
                   <span style={{ color: "var(--border-mid)" }}>·</span>
                   <span
                     onClick={(e) => e.stopPropagation()}
@@ -476,53 +489,14 @@ export default function SolutionList({
 
       {/* Save bar */}
       {isDirty && (
-        <div
-          style={{
-            position: "sticky",
-            bottom: 16,
-            marginTop: 20,
-            background: "var(--bg-primary)",
-            border: "1px solid var(--border-mid)",
-            borderRadius: 10,
-            padding: "10px 16px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
-          }}
-        >
-          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-            <i className="ti ti-briefcase" style={{ fontSize: 14, marginRight: 6 }} />
-            {Object.keys(engagementEdits).length} engagement{Object.keys(engagementEdits).length !== 1 ? "s" : ""} changed
-          </span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={discardChanges}
-              style={{
-                fontFamily: "inherit", fontSize: 13, padding: "6px 12px",
-                borderRadius: 6, border: "1px solid var(--border-light)",
-                background: "transparent", color: "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-            >
-              Discard
-            </button>
-            <button
-              onClick={saveChanges}
-              disabled={saving}
-              style={{
-                fontFamily: "inherit", fontSize: 13, fontWeight: 500,
-                padding: "6px 14px", borderRadius: 6, border: "none",
-                background: "var(--text-primary)", color: "var(--bg-primary)",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-                opacity: saving ? 0.5 : 1,
-              }}
-            >
-              <i className="ti ti-device-floppy" style={{ fontSize: 14 }} />
-              {saving ? "Saving…" : "Save"}
-            </button>
-          </div>
-        </div>
+        <SaveBar
+          icon="ti-briefcase"
+          label={`${Object.keys(engagementEdits).length} engagement${Object.keys(engagementEdits).length !== 1 ? "s" : ""} changed`}
+          saving={saving}
+          saveLabel="Save"
+          onDiscard={discardChanges}
+          onSave={saveChanges}
+        />
       )}
     </div>
   );

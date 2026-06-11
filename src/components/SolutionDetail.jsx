@@ -2,23 +2,12 @@ import { useState, useEffect, useMemo } from "react";
 import Badge from "./shared/Badge";
 import ProgressBar from "./shared/ProgressBar";
 import StatCard from "./shared/StatCard";
+import SaveBar from "./shared/SaveBar";
+import { getSplitParentIds, round1 } from "../data/entries";
+import { saveEntryTags } from "../services/github";
 import { STATUS_CONFIG, TASK_STATUS, CATEGORY_COLORS } from "../data/constants";
 import { getTagInfo } from "../data/taxonomy";
 import { daysUntil, newNoteId, relativeTime } from "../data/utils";
-
-const miniInputStyle = {
-  fontFamily: "inherit",
-  fontSize: 13,
-  padding: "3px 6px",
-  borderRadius: 4,
-  border: "1px solid var(--border-light)",
-  background: "var(--bg-primary)",
-  color: "var(--text-primary)",
-  textAlign: "right",
-  width: 52,
-  boxSizing: "border-box",
-  fontWeight: 500,
-};
 
 const miniSelectStyle = {
   fontFamily: "inherit",
@@ -58,24 +47,27 @@ const sectionBoxStyle = {
   padding: 16,
 };
 
-export default function SolutionDetail({ solution, onBack, onSave, username, activities = [], allEntries = [], entriesLoading = false }) {
+export default function SolutionDetail({ solution, onBack, onSave, username, activities = [], allEntries = [], entriesLoading = false, onRefreshEntries }) {
   const [draft, setDraft] = useState(structuredClone(solution));
   const [showExcludeForm, setShowExcludeForm] = useState(false);
   const [excludeNote, setExcludeNote] = useState(solution.excluded_note || "");
   const [saving, setSaving] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [activeTab, setActiveTab] = useState("tasks");
+  const [claimIds, setClaimIds] = useState(() => new Set()); // untagged entries staged to claim
 
   useEffect(() => {
     setDraft(structuredClone(solution));
     setShowExcludeForm(false);
     setExcludeNote(solution.excluded_note || "");
+    setClaimIds(new Set());
   }, [solution.id]);
 
-  const isDirty = useMemo(
+  const draftDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(solution),
     [draft, solution]
   );
+  const isDirty = draftDirty || claimIds.size > 0;
 
   const sc = STATUS_CONFIG[draft.status] || STATUS_CONFIG.draft;
 
@@ -94,13 +86,7 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
   const completedCount = draft.tasks.filter((t) => t.status === "complete").length;
 
   // IDs of entries that have been split (have children)
-  const splitParentIds = useMemo(() => {
-    const ids = new Set();
-    for (const e of allEntries) {
-      if (e.parent_id) ids.add(e.parent_id);
-    }
-    return ids;
-  }, [allEntries]);
+  const splitParentIds = useMemo(() => getSplitParentIds(allEntries), [allEntries]);
 
   // Entries tagged to this solution (excluding split parents)
   const solutionEntries = useMemo(() => {
@@ -111,8 +97,33 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
   }, [allEntries, draft.id, splitParentIds]);
 
   const totalActualHours = useMemo(() => {
-    return Math.round(solutionEntries.reduce((s, e) => s + (e.hours || 0), 0) * 10) / 10;
+    return round1(solutionEntries.reduce((s, e) => s + (e.hours || 0), 0));
   }, [solutionEntries]);
+
+  // Untagged entries on this solution's engagement — claimable from here
+  const untaggedEngagementEntries = useMemo(() => {
+    if (!draft.activity_id) return [];
+    return allEntries
+      .filter((e) =>
+        e.activity_id === draft.activity_id &&
+        !e.solution_id &&
+        !splitParentIds.has(e.id)
+      )
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [allEntries, draft.activity_id, splitParentIds]);
+
+  function toggleClaim(entryId) {
+    setClaimIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(entryId)) next.delete(entryId);
+      else next.add(entryId);
+      return next;
+    });
+  }
+
+  function claimAll() {
+    setClaimIds(new Set(untaggedEngagementEntries.map((e) => e.id)));
+  }
 
   // Hours by task_category for breakdown
   const hoursByCategory = useMemo(() => {
@@ -157,6 +168,7 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
 
   function discardChanges() {
     setDraft(structuredClone(solution));
+    setClaimIds(new Set());
   }
 
   function addNote() {
@@ -183,10 +195,20 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
   }
 
   async function handleSaveChanges() {
-    if (!onSave) return;
     setSaving(true);
     try {
-      await onSave(draft);
+      if (draftDirty && onSave) {
+        await onSave(draft);
+      }
+      if (claimIds.size > 0) {
+        const tagEdits = Object.fromEntries([...claimIds].map((id) => [id, draft.id]));
+        await saveEntryTags(tagEdits, allEntries);
+        setClaimIds(new Set());
+        if (onRefreshEntries) onRefreshEntries();
+      }
+    } catch (err) {
+      console.error("Failed to save:", err);
+      alert("Failed to save: " + err.message);
     } finally {
       setSaving(false);
     }
@@ -272,17 +294,16 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
           const pct = t.percent_complete || 0;
           const isOverdue = t.due_date && new Date(t.due_date + "T00:00:00") < new Date() && t.status !== "complete";
           return (
-            <div
-              key={i}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 80px 90px 80px 100px",
-                padding: "8px 14px",
-                borderTop: "0.5px solid var(--border-light)",
-                alignItems: "center",
-                fontSize: 13,
-              }}
-            >
+            <div key={i} style={{ borderTop: "0.5px solid var(--border-light)" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 80px 90px 80px 100px",
+                  padding: "8px 14px 5px",
+                  alignItems: "center",
+                  fontSize: 13,
+                }}
+              >
               <span style={{ color: "var(--text-primary)", fontWeight: 450, display: "flex", alignItems: "center", gap: 6 }}>
                 {t.name}
                 {t.estimated_hours > 0 && (
@@ -333,6 +354,10 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
                   ))}
                 </select>
               </span>
+              </div>
+              <div style={{ padding: "0 14px 7px" }}>
+                <ProgressBar value={pct} max={100} color={catColor} height={3} />
+              </div>
             </div>
           );
         })}
@@ -357,29 +382,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
             {completedCount}/{draft.tasks.length} done
           </span>
         </div>
-      </div>
-    );
-  }
-
-  function renderProgressBars() {
-    return (
-      <div style={sectionBoxStyle}>
-        <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10, color: "var(--text-primary)" }}>
-          Progress
-        </div>
-        {draft.tasks.map((t, i) => {
-          const catColor = CATEGORY_COLORS[t.category] || "#888";
-          const pct = t.percent_complete || 0;
-          return (
-            <div key={i} style={{ marginBottom: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
-                <span style={{ color: "var(--text-secondary)" }}>{t.name}</span>
-                <span style={{ fontWeight: 500, color: "var(--text-primary)" }}>{pct}%</span>
-              </div>
-              <ProgressBar value={pct} max={100} color={catColor} height={5} />
-            </div>
-          );
-        })}
       </div>
     );
   }
@@ -483,72 +485,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
   function renderDetails() {
     return (
       <div>
-        {/* Editable dates */}
-        <div
-          style={{
-            display: "flex", gap: 16, marginBottom: 14, flexWrap: "wrap",
-            alignItems: "center",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={labelStyle}>Created</span>
-            <input
-              type="date"
-              value={draft.date_created || ""}
-              onChange={(e) => updateDraft("date_created", e.target.value)}
-              style={miniDateStyle}
-            />
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={labelStyle}>Go-live</span>
-            <input
-              type="date"
-              value={draft.go_live_date || ""}
-              onChange={(e) => updateDraft("go_live_date", e.target.value)}
-              style={{
-                ...miniDateStyle,
-                borderColor: draft.go_live_date && daysUntil(draft.go_live_date).includes("ago")
-                  ? "rgba(226,75,74,0.5)" : "var(--border-light)",
-              }}
-            />
-            {draft.go_live_date && (
-              <span style={{
-                fontSize: 11, fontWeight: 500,
-                color: daysUntil(draft.go_live_date).includes("ago") ? "#E24B4A" : "var(--text-secondary)",
-              }}>
-                {daysUntil(draft.go_live_date)}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Engagement link */}
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
-          <span style={labelStyle}>Engagement</span>
-          <select
-            value={draft.activity_id || ""}
-            onChange={(e) => updateDraft("activity_id", e.target.value || null)}
-            style={{
-              ...miniSelectStyle,
-              fontSize: 12,
-              padding: "4px 8px",
-              maxWidth: 360,
-            }}
-          >
-            <option value="">— None —</option>
-            {activities.filter((a) => !a.archived).map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.customer} — {a.label || a.code}
-              </option>
-            ))}
-          </select>
-          {linkedActivity && (
-            <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-              {linkedActivity.id.toUpperCase()}
-            </span>
-          )}
-        </div>
-
         {/* Design document link */}
         <div
           style={{
@@ -588,11 +524,12 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
           )}
         </div>
 
-        {/* Notes textarea */}
+        {/* Description */}
+        <div style={{ ...labelStyle, marginBottom: 6 }}>Description</div>
         <textarea
           value={draft.notes || ""}
           onChange={(e) => updateDraft("notes", e.target.value)}
-          placeholder="Notes…"
+          placeholder="What this solution covers, scope notes, context…"
           style={{
             fontFamily: "inherit", fontSize: 13, color: "var(--text-secondary)",
             padding: "10px 14px", background: "var(--bg-secondary)",
@@ -660,7 +597,7 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
         {/* Entry table */}
         {solutionEntries.length === 0 ? (
           <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "8px 0" }}>
-            No time entries tagged to this solution yet. Tag entries from the Engagements view.
+            No time entries tagged to this solution yet. Claim untagged entries below, or tag them from Time Entries or the engagement.
           </div>
         ) : (
           <div style={{ border: "0.5px solid var(--border-light)", borderRadius: "var(--radius-md)", overflow: "hidden" }}>
@@ -729,6 +666,79 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
             </div>
           </div>
         )}
+
+        {/* Untagged entries on this engagement — claim from here */}
+        {draft.activity_id && untaggedEngagementEntries.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>
+                Untagged on this engagement
+                <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400, marginLeft: 6 }}>
+                  {untaggedEngagementEntries.length} entr{untaggedEngagementEntries.length !== 1 ? "ies" : "y"}
+                </span>
+              </div>
+              <button
+                onClick={claimAll}
+                style={{
+                  fontFamily: "inherit", fontSize: 11, fontWeight: 500,
+                  padding: "3px 10px", borderRadius: 99,
+                  border: "1px solid var(--border-light)", background: "transparent",
+                  color: "var(--text-secondary)", cursor: "pointer",
+                }}
+              >
+                Claim all
+              </button>
+            </div>
+            <div style={{ border: "0.5px solid var(--border-light)", borderRadius: "var(--radius-md)", overflow: "hidden" }}>
+              {untaggedEngagementEntries.slice(0, 30).map((entry, i) => {
+                const claimed = claimIds.has(entry.id);
+                return (
+                  <div
+                    key={entry.id}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "90px 55px 1fr 80px",
+                      padding: "6px 12px",
+                      borderTop: i === 0 ? "none" : "0.5px solid var(--border-light)",
+                      alignItems: "center",
+                      fontSize: 12,
+                      background: claimed ? "rgba(24,95,165,0.04)" : "transparent",
+                    }}
+                  >
+                    <span style={{ color: "var(--text-secondary)" }}>{entry.date}</span>
+                    <span style={{ textAlign: "right", fontWeight: 500, color: "var(--text-primary)" }}>{entry.hours}</span>
+                    <span style={{
+                      paddingLeft: 12, color: "var(--text-secondary)",
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    }}>
+                      {entry.notes || entry.engagement_task || "—"}
+                    </span>
+                    <span style={{ textAlign: "right" }}>
+                      <button
+                        onClick={() => toggleClaim(entry.id)}
+                        style={{
+                          fontFamily: "inherit", fontSize: 11, fontWeight: 500,
+                          padding: "2px 10px", borderRadius: 99, cursor: "pointer",
+                          border: claimed ? "1px solid #185FA5" : "1px solid var(--border-light)",
+                          background: claimed ? "#185FA5" : "transparent",
+                          color: claimed ? "#fff" : "var(--text-secondary)",
+                          transition: "all 0.15s",
+                        }}
+                      >
+                        {claimed ? "Claimed" : "Claim"}
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
+              {untaggedEngagementEntries.length > 30 && (
+                <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-secondary)", borderTop: "0.5px solid var(--border-light)" }}>
+                  Showing 30 of {untaggedEngagementEntries.length} — use Time Entries for bulk tagging
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -739,7 +749,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
     const tabs = [
       { key: "tasks", label: "Tasks", icon: "ti-list-check" },
       { key: "time", label: "Time", icon: "ti-clock" },
-      { key: "progress", label: "Progress", icon: "ti-chart-bar" },
       { key: "activity", label: "Activity", icon: "ti-message-circle" },
       { key: "details", label: "Details", icon: "ti-info-circle" },
     ];
@@ -794,15 +803,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
                     {noteCount}
                   </span>
                 )}
-                {tab.key === "time" && totalActualHours > 0 && (
-                  <span style={{
-                    fontSize: 10, fontWeight: 500, background: "var(--bg-secondary)",
-                    color: "var(--text-secondary)", borderRadius: 99,
-                    padding: "1px 6px", marginLeft: 2,
-                  }}>
-                    {totalActualHours}h
-                  </span>
-                )}
               </button>
             );
           })}
@@ -811,7 +811,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
         {/* Tab content */}
         {activeTab === "tasks" && renderTaskTable()}
         {activeTab === "time" && renderTimeEntries()}
-        {activeTab === "progress" && renderProgressBars()}
         {activeTab === "activity" && renderActivityLog()}
         {activeTab === "details" && renderDetails()}
       </>
@@ -888,11 +887,6 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
             <option key={k} value={k}>{v.label}</option>
           ))}
         </select>
-        {draft.version && draft.version !== "1.0" && (
-          <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 500 }}>
-            v{draft.version}
-          </span>
-        )}
       </div>
 
       <div
@@ -1036,53 +1030,20 @@ export default function SolutionDetail({ solution, onBack, onSave, username, act
 
       {/* Save bar */}
       {isDirty && (
-        <div
-          style={{
-            position: "sticky",
-            bottom: 16,
-            marginTop: 20,
-            background: "var(--bg-primary)",
-            border: "1px solid var(--border-mid)",
-            borderRadius: 10,
-            padding: "10px 16px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
-          }}
-        >
-          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-            <i className="ti ti-pencil" style={{ fontSize: 14, marginRight: 6 }} />
-            Unsaved changes
-          </span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={discardChanges}
-              style={{
-                fontFamily: "inherit", fontSize: 13, padding: "6px 12px",
-                borderRadius: 6, border: "1px solid var(--border-light)",
-                background: "transparent", color: "var(--text-secondary)",
-                cursor: "pointer",
-              }}
-            >
-              Discard
-            </button>
-            <button
-              onClick={handleSaveChanges}
-              disabled={saving}
-              style={{
-                fontFamily: "inherit", fontSize: 13, fontWeight: 500,
-                padding: "6px 14px", borderRadius: 6, border: "none",
-                background: "var(--text-primary)", color: "var(--bg-primary)",
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-                opacity: saving ? 0.5 : 1,
-              }}
-            >
-              <i className="ti ti-device-floppy" style={{ fontSize: 14 }} />
-              {saving ? "Saving…" : "Save changes"}
-            </button>
-          </div>
-        </div>
+        <SaveBar
+          icon="ti-pencil"
+          label={
+            claimIds.size > 0 && draftDirty
+              ? `Unsaved changes · ${claimIds.size} claim${claimIds.size !== 1 ? "s" : ""}`
+              : claimIds.size > 0
+                ? `${claimIds.size} entr${claimIds.size !== 1 ? "ies" : "y"} to claim`
+                : "Unsaved changes"
+          }
+          saving={saving}
+          saveLabel="Save changes"
+          onDiscard={discardChanges}
+          onSave={handleSaveChanges}
+        />
       )}
     </div>
   );

@@ -4,14 +4,13 @@ import Dashboard from "./components/Dashboard";
 import SolutionList from "./components/SolutionList";
 import SolutionDetail from "./components/SolutionDetail";
 import Timeline from "./components/Timeline";
-import SolutionUpload from "./components/SolutionUpload";
+import ImportHub from "./components/ImportHub";
 import Timesheet from "./components/Timesheet";
 import Engagements from "./components/Engagements";
 import { NAV_ITEMS } from "./data/constants";
 import { AUTH_CONFIG, DATA_CONFIG } from "./data/config";
 import { getStoredAuth, handleOAuthCallback, clearAuth } from "./services/auth";
-import { configure, isConfigured, loadIndex, loadSolution, saveSolution, saveSolutionsBatch, loadActivities, saveActivities, loadTimesheet, saveTimesheet, loadAllEntries } from "./services/github";
-import { isoWeekKey, todayISO } from "./data/utils";
+import { configure, isConfigured, loadIndex, loadSolution, saveSolution, saveSolutionsBatch, loadActivities, saveActivities, loadAllEntries } from "./services/github";
 
 const pillStyle = {
   fontSize: 12, padding: "4px 10px", borderRadius: 99, cursor: "pointer",
@@ -33,15 +32,11 @@ export default function App() {
   const [dataLoading, setDataLoading] = useState(false);
   const [dataError, setDataError] = useState("");
 
-  // Timesheet state
-  const [currentWeek, setCurrentWeek] = useState(isoWeekKey(todayISO()));
-  const [timesheet, setTimesheet] = useState(null);
-  const [timesheetSha, setTimesheetSha] = useState(null);
-  const [timesheetLoading, setTimesheetLoading] = useState(false);
+  // Activities (engagement records)
   const [activities, setActivities] = useState([]);
   const [activitiesSha, setActivitiesSha] = useState(null);
 
-  // All entries (loaded on demand for Engagements view)
+  // All time entries (loaded once after auth — actuals derive from these)
   const [allEntries, setAllEntries] = useState([]);
   const [allEntriesLoading, setAllEntriesLoading] = useState(false);
   const [allEntriesLoaded, setAllEntriesLoaded] = useState(false);
@@ -131,29 +126,6 @@ export default function App() {
     }
   }, [auth]);
 
-  // Load timesheet when week changes
-  useEffect(() => {
-    if (!auth || !isConfigured()) return;
-    setTimesheetLoading(true);
-    loadTimesheet(currentWeek)
-      .then((result) => {
-        setTimesheet(result.data);
-        setTimesheetSha(result.sha);
-      })
-      .catch((err) => {
-        console.warn("Failed to load timesheet:", err);
-        setTimesheet({ week: currentWeek, entries: [] });
-        setTimesheetSha(null);
-      })
-      .finally(() => setTimesheetLoading(false));
-  }, [auth, currentWeek]);
-
-  async function handleTimesheetSave(weekKey, data, sha) {
-    const result = await saveTimesheet(weekKey, data, sha);
-    setTimesheet(data);
-    setTimesheetSha(result.sha);
-  }
-
   async function handleActivitiesSave(updatedActivities) {
     const result = await saveActivities(updatedActivities, activitiesSha);
     setActivities(updatedActivities);
@@ -168,14 +140,6 @@ export default function App() {
       setActivitiesSha(actResult.sha);
     } catch (err) {
       console.warn("Failed to reload activities:", err);
-    }
-    // Reload current week's timesheet
-    try {
-      const tsResult = await loadTimesheet(currentWeek);
-      setTimesheet(tsResult.data);
-      setTimesheetSha(tsResult.sha);
-    } catch (err) {
-      console.warn("Failed to reload timesheet:", err);
     }
   }
 
@@ -194,12 +158,13 @@ export default function App() {
     }
   }, []);
 
-  // Load entries on first visit to engagements
+  // Load all entries once after auth — actual hours everywhere derive
+  // from tagged entries, so the dashboard needs them too.
   useEffect(() => {
-    if ((view === "engagements" || view === "detail" || view === "timesheet") && auth && isConfigured() && !allEntriesLoaded && !allEntriesLoading) {
+    if (auth && isConfigured() && !allEntriesLoaded && !allEntriesLoading) {
       fetchAllEntries();
     }
-  }, [view, auth, allEntriesLoaded, allEntriesLoading, fetchAllEntries]);
+  }, [auth, allEntriesLoaded, allEntriesLoading, fetchAllEntries]);
 
   function handleLogout() {
     clearAuth();
@@ -384,7 +349,7 @@ export default function App() {
 
       {/* Views — Dashboard and Timeline use activeSolutions (excludes excluded) */}
       {!dataLoading && view === "dashboard" && activeSolutions.length > 0 && (
-        <Dashboard solutions={activeSolutions} onSelect={handleSelect} />
+        <Dashboard solutions={activeSolutions} allEntries={allEntries} onSelect={handleSelect} />
       )}
       {/* Show empty dashboard message if all solutions are excluded */}
       {!dataLoading && view === "dashboard" && solutions.length > 0 && activeSolutions.length === 0 && (
@@ -396,7 +361,8 @@ export default function App() {
         <SolutionList solutions={solutions} onSelect={handleSelect}
           filterTag={filterTag} setFilterTag={setFilterTag}
           filterStatus={filterStatus} setFilterStatus={setFilterStatus}
-          activities={activities} onBatchSave={handleBatchSave} />
+          activities={activities} allEntries={allEntries}
+          onBatchSave={handleBatchSave} />
       )}
       {!dataLoading && view === "timeline" && activeSolutions.length > 0 && (
         <Timeline solutions={activeSolutions} onSelect={handleSelect} />
@@ -408,16 +374,24 @@ export default function App() {
           allEntries={allEntries}
           entriesLoading={allEntriesLoading}
           onRefreshEntries={fetchAllEntries}
+          onBatchSave={handleBatchSave}
+          onSaveActivities={handleActivitiesSave}
         />
       )}
       {view === "detail" && selected && (
-        <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} username={auth?.username} activities={activities} allEntries={allEntries} entriesLoading={allEntriesLoading} />
+        <SolutionDetail solution={selected} onBack={() => setView("solutions")} onSave={handleDetailSave} username={auth?.username} activities={activities} allEntries={allEntries} entriesLoading={allEntriesLoading} onRefreshEntries={fetchAllEntries} />
       )}
       {view === "upload" && (
-        <SolutionUpload
+        <ImportHub
           workerUrl={AUTH_CONFIG.workerUrl}
-          onSaved={handleSolutionSaved}
           solutions={solutions}
+          activities={activities}
+          onSolutionSaved={handleSolutionSaved}
+          onEntriesImported={() => {
+            fetchAllEntries();
+            handleRefresh();
+            setView("timesheet");
+          }}
         />
       )}
       {view === "timesheet" && (
@@ -427,8 +401,7 @@ export default function App() {
           allEntries={allEntries}
           entriesLoading={allEntriesLoading}
           onRefreshEntries={fetchAllEntries}
-          onSaveActivities={handleActivitiesSave}
-          onRefresh={handleRefresh}
+          onOpenImport={() => setView("upload")}
         />
       )}
     </div>

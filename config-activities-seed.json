@@ -1,0 +1,250 @@
+[
+  {
+    "id": "e022415-0001",
+    "label": "David Protein Support",
+    "code": "E022415-0001 David Protein : Support T&M",
+    "customer": "David Protein",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e021882-0002",
+    "label": "TruConnect Support",
+    "code": "E021882-0002 NS-PPS-Support & Optimization-Minimum Monthly-MM",
+    "customer": "TruConnect Communications Inc.",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e023362-0001",
+    "label": "Prestonwood Landscape Support",
+    "code": "E023362-0001 NS-PPS-Support & Optimization-TM",
+    "customer": "Prestonwood Landscape Services",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e022565-0001",
+    "label": "Zehnder Groups North Support",
+    "code": "E022565-0001 NS-PPS-Support & Optimization-TM",
+    "customer": "Zehnder Groups North America",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e020300-0005",
+    "label": "Pluto PR Services, LLC Support",
+    "code": "E020300-0005 NS-PPS-Support & Optimization-Monthly Minimum-MM",
+    "customer": "Pluto PR Services, LLC",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e019908-0001",
+    "label": "Tru-Spec Global LLC Support",
+    "code": "E019908-0001 NS-PPS-NetSuite Support & Optimization-TM",
+    "customer": "Tru-Spec Global LLC",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e021046-0002",
+    "label": "Bluberi Gaming Canada Support",
+    "code": "E021046-0002 NS-PPS-Support & Optimization-Monthly Minimum-MM",
+    "customer": "Bluberi Gaming Canada Inc.",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e022420-0001",
+    "label": "Antares TX Support",
+    "code": "E022420-0001 Antares Rx- Coupa + NS PPS-2026-27 Support (SUB)",
+    "customer": "Antares TX (fna Scorpion Therapeutics)",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e017151-0002",
+    "label": "eMaxx Insurance Support",
+    "code": "E017151-0002 E017151-0002 eMaxx Insurance Services LLC : Support & Optimization",
+    "customer": "eMaxx Insurance Services, LLC",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e020231-0001",
+    "label": "Sweet Loren's Support",
+    "code": "E020231-0001 NS-PPS-NetSuite Support & Optimization-TM",
+    "customer": "Sweet Loren's",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e017448-0002",
+    "label": "Spraggins, Inc. Implementation",
+    "code": "E017448-0002 PRJ1457-Spraggins Inc. : NetSuite Implementation",
+    "customer": "Spraggins, Inc.",
+    "default_task": null,
+    "archived": false
+  },
+  {
+    "id": "e017125-0004",
+    "label": "CDS Distributing Inc. Support",
+    "code": "E017125-0004 NS-PPS-Support & Optimization-TM (2026)",
+    "customer": "CDS Distributing Inc.",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e021374-0001",
+    "label": "Shadow Lion Implementation",
+    "code": "E021374-0001 Shadow Lion NS-NetSuite Deployment-TM",
+    "customer": "Shadow Lion",
+    "default_task": null,
+    "archived": false
+  },
+  {
+    "id": "e016589-0006",
+    "label": "Center for Justice Delivery",
+    "code": "E016589-0006 CJI-NetSuite PPS-Supp&Optimization-25-26 (TM)",
+    "customer": "Center for Justice Innovation",
+    "default_task": null,
+    "archived": false
+  },
+  {
+    "id": "e010699-0016",
+    "label": "Foghorn Therapeutics Inc Support",
+    "code": "E010699-0016 Foghorn-Coupa PPS-Ops Support 2026 (MM)",
+    "customer": "Foghorn Therapeutics Inc",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e023110-0001",
+    "label": "Relay, Inc. Support",
+    "code": "E023110-0001 NS-PPS-Support & Optimization-Monthly Minimum-MM",
+    "customer": "Relay, Inc.",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e020831-0001",
+    "label": "National Carwash Support",
+    "code": "E020831-0001 NS-PPS-NetSuite Support & Optimization-TM",
+    "customer": "National Carwash Solutions (NCS)",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e017304-0002",
+    "label": "OSEA International Support",
+    "code": "E017304-0002 OSEA International : NetSuite Support & Optimization",
+    "customer": "OSEA International",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e017063-0002",
+    "label": "Advanced Programs Inc. Implementation",
+    "code": "E017063-0002 Advanced Programs Inc. : NetSuite Implementation",
+    "customer": "Advanced Programs Inc.",
+    "default_task": null,
+    "archived": false
+  },
+  {
+    "id": "e020259-0004",
+    "label": "Dakota Specialty Support",
+    "code": "E020259-0004 NS-PPS-Support & Optimization-Monthly Minimum-MM",
+    "customer": "Dakota Specialty Milling, Inc.",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e022076-0001",
+    "label": "Spencer Technologies Support",
+    "code": "E022076-0001 NS-PPS-NetSuite Support & Optimization-TM",
+    "customer": "Spencer Technologies",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e017241-0002",
+    "label": "MGE Management Experts, Support",
+    "code": "E017241-0002 E017241-0002 MGE Management Experts Inc : NetSuite Premier Support",
+    "customer": "MGE Management Experts, Inc",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e017100-0002",
+    "label": "Baseline Energy MSP",
+    "code": "E017100-0002 E017100-0002 Baseline Energy Services L.P. : Managed Service Provid",
+    "customer": "Baseline Energy Services, L.P.",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e015181-0008",
+    "label": "enGene Support",
+    "code": "E015181-0008 Engene-Coupa PPS-Ops Support 2025-26 (MM)",
+    "customer": "enGene",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e023142-0001",
+    "label": "ICBS Inc. Support",
+    "code": "E023142-0001 NS-PPS-Support & Optimization-TM",
+    "customer": "ICBS Inc.",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e017342-0002",
+    "label": "Informativ Support",
+    "code": "E017342-0002 Informativ (Credit Bureau Connection) : NetSuite Support & Optimiza",
+    "customer": "Informativ (Credit Bureau Connection)",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e018975-0001",
+    "label": "LockState Support",
+    "code": "E018975-0001 NS-PPS-NetSuite Support & Optimization-TM",
+    "customer": "LockState (RemoteLock)",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e020998-0003",
+    "label": "Pharmaceutical Trade Support",
+    "code": "E020998-0003 NS-PPS-Support & Optimization-Monthly Minimum-MM",
+    "customer": "Pharmaceutical Trade Services",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e019577-0001",
+    "label": "Seraphina Therapeutics, Support",
+    "code": "E019577-0001 NS-PPS-NetSuite Support & Optimization-TM",
+    "customer": "Seraphina Therapeutics, Inc.",
+    "default_task": "Support & Optimization",
+    "archived": false
+  },
+  {
+    "id": "e017062-0002",
+    "label": "Advanced Ambulatory, Inc. Delivery",
+    "code": "E017062-0002 E017062-0002 Advanced Ambulatory Inc. : Services SOW",
+    "customer": "Advanced Ambulatory, Inc.",
+    "default_task": null,
+    "archived": false
+  },
+  {
+    "id": "e017937-0002",
+    "label": "CrossCountry Consulting Admin",
+    "code": "E017937-0002 CCC Admin",
+    "customer": "CrossCountry Consulting",
+    "default_task": null,
+    "archived": false
+  }
+]
